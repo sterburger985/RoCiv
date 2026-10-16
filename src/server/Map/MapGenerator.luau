@@ -239,7 +239,7 @@ end
 -- Geography field ----------------------------------------------------------------
 -- All shapes work in normalised coordinates: u in [0, aspect], v in [0, 1].
 
-type Shape = { kind: string, a: Vector2, b: Vector2?, rx: number, ry: number, rot: number, strength: number }
+type Shape = { kind: string, a: Vector2, b: Vector2?, rx: number, ry: number, rot: number, strength: number, owner: number }
 
 local function buildShapes(rng: Random, def: any, aspect: number)
 	local shapes: { Shape } = {}
@@ -267,14 +267,14 @@ local function buildShapes(rng: Random, def: any, aspect: number)
 		end
 	end
 	local landArea = aspect * def.landFraction
-	for _, c in centres do
+	for ci, c in centres do
 		-- Each continent gets a similar share of the land; vary it a little.
 		local share = landArea / #centres * rng:NextNumber(0.8, 1.25)
 		local elong = rng:NextNumber(1.1, 1.9)
 		local ry = math.sqrt(share / (math.pi * elong)) * 1.15
 		local rx = ry * elong
 		local rot = rng:NextNumber(0, math.pi)
-		table.insert(shapes, { kind = "Continent", a = c, rx = rx, ry = ry, rot = rot, strength = 1 })
+		table.insert(shapes, { kind = "Continent", a = c, rx = rx, ry = ry, rot = rot, strength = 1, owner = ci })
 
 		-- Peninsulas: capsules reaching out from the coast.
 		for _ = 1, rng:NextInteger(def.peninsulas[1], def.peninsulas[2]) do
@@ -285,19 +285,19 @@ local function buildShapes(rng: Random, def: any, aspect: number)
 			local len = ry * rng:NextNumber(0.7, 1.2)
 			local bend = Vector2.new(-outward.Y, outward.X) * rng:NextNumber(-0.3, 0.3)
 			local tip = edge + (outward + bend).Unit * len
-			table.insert(shapes, { kind = "Peninsula", a = edge, b = tip, rx = ry * rng:NextNumber(0.18, 0.28), ry = 0, rot = 0, strength = 0.85 })
+			table.insert(shapes, { kind = "Peninsula", a = edge, b = tip, rx = ry * rng:NextNumber(0.18, 0.28), ry = 0, rot = 0, strength = 0.85, owner = ci })
 		end
 		-- Bays: notches cut into the coast.
 		for _ = 1, rng:NextInteger(def.bays[1], def.bays[2]) do
 			local ang = rng:NextNumber(0, math.pi * 2)
 			local dir = Vector2.new(math.cos(ang), math.sin(ang))
 			local edge = c + Vector2.new(dir.X * rx * math.cos(rot) - dir.Y * ry * math.sin(rot), dir.X * rx * math.sin(rot) + dir.Y * ry * math.cos(rot)) * 0.92
-			table.insert(bays, { kind = "Bay", a = edge, rx = ry * rng:NextNumber(0.25, 0.4), ry = 0, rot = 0, strength = 1.1 })
+			table.insert(bays, { kind = "Bay", a = edge, rx = ry * rng:NextNumber(0.25, 0.4), ry = 0, rot = 0, strength = 1.1, owner = 0 })
 		end
 	end
 	-- Archipelagos: clusters of small islands away from the continents.
 	local islands: { Shape } = {}
-	for _ = 1, def.islandClusters do
+	for cluster = 1, def.islandClusters do
 		local centre: Vector2? = nil
 		for _ = 1, 200 do
 			local c = Vector2.new(rng:NextNumber(0.1, aspect - 0.1), rng:NextNumber(0.12, 0.88))
@@ -316,19 +316,20 @@ local function buildShapes(rng: Random, def: any, aspect: number)
 		if centre then
 			for _ = 1, rng:NextInteger(4, 7) do
 				local p = centre + Vector2.new(rng:NextNumber(-0.11, 0.11), rng:NextNumber(-0.09, 0.09))
-				table.insert(islands, { kind = "Island", a = p, rx = rng:NextNumber(0.022, 0.04), ry = 0, rot = 0, strength = 0.75 })
+				table.insert(islands, { kind = "Island", a = p, rx = rng:NextNumber(0.022, 0.04), ry = 0, rot = 0, strength = 0.75, owner = 100 + cluster })
 			end
 		end
 	end
 	return shapes, bays, islands, #centres
 end
 
-local function sampleElevation(p: Vector2, shapes: { Shape }, bays: { Shape }, islands: { Shape }, noiseOff: Vector3, aspect: number): number
+local function sampleElevation(p: Vector2, shapes: { Shape }, bays: { Shape }, islands: { Shape }, noiseOff: Vector3, aspect: number): (number, number)
 	-- Domain warp gives coasts an organic outline.
 	local wx = fbm(p.X * 3.1 + noiseOff.X, p.Y * 3.1 + noiseOff.Y, noiseOff.Z, 3) * 0.12
 	local wy = fbm(p.X * 3.1 + noiseOff.Y, p.Y * 3.1 + noiseOff.X, noiseOff.Z + 11, 3) * 0.12
 	local q = p + Vector2.new(wx, wy)
 	local e = -0.6
+	local owner = 0
 	for _, sh in shapes do
 		local v
 		if sh.kind == "Continent" then
@@ -343,12 +344,14 @@ local function sampleElevation(p: Vector2, shapes: { Shape }, bays: { Shape }, i
 		end
 		if v > e then
 			e = v
+			owner = sh.owner
 		end
 	end
 	for _, sh in islands do
 		local v = (1 - (q - sh.a).Magnitude / sh.rx) * sh.strength
 		if v > e then
 			e = v
+			owner = sh.owner
 		end
 	end
 	for _, sh in bays do
@@ -367,7 +370,7 @@ local function sampleElevation(p: Vector2, shapes: { Shape }, bays: { Shape }, i
 	local dy = math.min(p.Y, 1 - p.Y)
 	local edge = math.min(dx * 2.2, dy)
 	e -= (1 - smoothstep(0.0, 0.12, edge)) * 1.2
-	return e
+	return e, owner
 end
 
 -- Landmasses ----------------------------------------------------------------------
@@ -533,12 +536,14 @@ local function generateOnce(seed: number, def: any, count: number, width: number
 	local mx, my, mz = rng:NextNumber(-10000, 10000), rng:NextNumber(-10000, 10000), rng:NextNumber(0, 100)
 	local tundraJitter = {}
 	local rawElev: { [number]: number } = {}
+	local shapeOwner: { [number]: number } = {}
 	local minE, maxE = math.huge, -math.huge
 	for _, id in ids do
 		local t = territories[id]
 		local p = Vector2.new(t.centroid.X / height, t.centroid.Y / height) -- u in [0, aspect]
-		local e = sampleElevation(p, shapes, bays, islands, noiseOff, aspect)
+		local e, owner = sampleElevation(p, shapes, bays, islands, noiseOff, aspect)
 		rawElev[id] = e
+		shapeOwner[id] = owner
 		minE = math.min(minE, e)
 		maxE = math.max(maxE, e)
 		local nx, ny = t.centroid.X / width, t.centroid.Y / height
@@ -563,6 +568,27 @@ local function generateOnce(seed: number, def: any, count: number, width: number
 			t.elevation = math.max(0, seaLevel - 0.001)
 		end
 		t.isWater = t.elevation < seaLevel
+	end
+	-- Keep continents apart: where land of two different shapes (continents
+	-- or archipelagos) touches, the lower side becomes sea. This guarantees
+	-- the match size's continent count instead of noise merging them.
+	local straits = 0
+	for _, id in ids do
+		local t = territories[id]
+		if not t.isWater then
+			for _, nb in t.neighbors do
+				local o = territories[nb]
+				if not o.isWater and shapeOwner[nb] ~= shapeOwner[id] then
+					local low = if o.elevation < t.elevation or (o.elevation == t.elevation and nb < id) then o else t
+					low.isWater = true
+					low.elevation = math.max(0, seaLevel - 0.001)
+					straits += 1
+					if low == t then
+						break
+					end
+				end
+			end
+		end
 	end
 
 	-- Water bodies not connected to the outer ocean: small ones become
@@ -908,6 +934,7 @@ local function generateOnce(seed: number, def: any, count: number, width: number
 			totalMs = (t1 - t0) * 1000,
 			lakesFilled = lakesFilled,
 			lakes = lakesAdded,
+			straits = straits,
 			terrainCounts = terrainCounts,
 		},
 	}
