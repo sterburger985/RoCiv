@@ -91,12 +91,12 @@ local MATERIAL_COLORS: { [Enum.Material]: Color3 } = {
 	[M.Grass] = Color3.fromRGB(104, 148, 56),
 	[M.LeafyGrass] = Color3.fromRGB(46, 92, 38),
 	[M.Ground] = Color3.fromRGB(200, 184, 104),
-	[M.Sand] = Color3.fromRGB(226, 204, 148),
+	[M.Sand] = Color3.fromRGB(214, 192, 138),
 	[M.Sandstone] = Color3.fromRGB(196, 176, 128),
-	[M.Rock] = Color3.fromRGB(122, 112, 102),
+	[M.Rock] = Color3.fromRGB(104, 96, 88),
 	[M.Snow] = Color3.fromRGB(240, 244, 248),
 	[M.Mud] = Color3.fromRGB(132, 136, 108),
-	[M.Pavement] = Color3.fromRGB(236, 226, 192),
+	[M.Pavement] = Color3.fromRGB(150, 150, 110),
 	-- Sepia (Civilization VI "explored" look)
 	[M.Limestone] = Color3.fromRGB(196, 170, 124),
 	[M.Concrete] = Color3.fromRGB(156, 130, 92),
@@ -108,7 +108,7 @@ local MATERIAL_COLORS: { [Enum.Material]: Color3 } = {
 
 -- Terrain heights (studs above sea level) ---------------------------------------
 
-local BASE = { Ocean = -18, Coast = -6, Lake = -6, Grassland = 3, Plains = 2.5, Desert = 2.5, Forest = 3.5, Tundra = 3, Mountains = 18 }
+local BASE = { Ocean = -20, Coast = -3.5, Lake = -5, Grassland = 3, Plains = 2.5, Desert = 2.5, Forest = 3.5, Tundra = 3, Mountains = 18 }
 local RISE = { Ocean = 0, Coast = 0, Lake = 0, Grassland = 7, Plains = 4, Desert = 5, Forest = 6, Tundra = 6, Mountains = 14 }
 
 local function targetHeight(r: any): number
@@ -499,11 +499,11 @@ function TerrainPainter._paint(self: TerrainPainter, id: number, mode: Mode?)
 						local snow = false
 						local canopy = 0
 						if tt == "Grassland" then
-							h += (noise(wx / 90, wz / 90, 1) * 3.5 + noise(wx / 28, wz / 28, 2)) * f
+							h += (noise(wx / 170, wz / 170, 1) * 8 + noise(wx / 60, wz / 60, 2) * 3 + noise(wx / 22, wz / 22, 3) * 0.8) * f
 						elseif tt == "Plains" then
-							h += (noise(wx / 120, wz / 120, 4) * 2.5 + noise(wx / 35, wz / 35, 5) * 0.6) * f
+							h += (noise(wx / 200, wz / 200, 4) * 5 + noise(wx / 55, wz / 55, 5) * 1.5) * f
 						elseif tt == "Forest" then
-							h += noise(wx / 100, wz / 100, 6) * 3 * f
+							h += noise(wx / 160, wz / 160, 6) * 6 * f
 							local cn = noise(wx / 13, wz / 13, 7) + noise(wx / 40, wz / 40, 8) * 0.5
 							if cn > -0.25 then
 								canopy = (2.2 + (cn + 0.25) * 5) * math.min(1, f * 1.6)
@@ -512,8 +512,8 @@ function TerrainPainter._paint(self: TerrainPainter, id: number, mode: Mode?)
 							local dune = ridge(wx + noise(wz / 80, 0, 9) * 30, wz, 38, 10)
 							h += (dune * 5 + noise(wx / 150, wz / 150, 11) * 2) * f
 						elseif tt == "Tundra" then
-							h += noise(wx / 80, wz / 80, 12) * 3 * f
-							snow = noise(wx / 36, wz / 36, 13) > 0.38
+							h += (noise(wx / 150, wz / 150, 12) * 6 + noise(wx / 40, wz / 40, 18)) * f
+							snow = noise(wx / 36, wz / 36, 13) > 0.5
 						elseif tt == "Mountains" then
 							local peaks = ridge(wx, wz, 95, 14) ^ 1.5 * 52 + ridge(wx, wz, 38, 15) * 14
 							h += (peaks + noise(wx / 25, wz / 25, 16) * 3) * f
@@ -553,34 +553,45 @@ function TerrainPainter._paint(self: TerrainPainter, id: number, mode: Mode?)
 						end
 						h += canopy
 
-						-- River channel.
+						-- River: a valley with water filling whole voxel cells (partial
+						-- water cells render as nothing, which broke rivers into dots).
 						if river and #river >= 2 then
 							local d = math.huge
 							for s = 1, #river - 1 do
 								d = math.min(d, segDist(c, river[s], river[s + 1]))
 							end
 							local rw = MapConfig.RIVER_HALF_WIDTH
-							if d < rw then
-								local bank = h - canopy
-								if sepia then
-									h = math.max(bank - 0.6, 0.4)
-									mat = SEPIA.Water
+							if d < rw * 2.4 then
+								local ground = h - canopy
+								local wl = math.max(0, math.floor((ground - 1) / RES) * RES)
+								if d < rw then
+									if sepia then
+										h = wl + 0.6
+										mat = SEPIA.Water
+									else
+										wTop = Y0 + wl
+										h = wl - 3
+										mat = VISIBLE.SeaFloor
+									end
 								else
-									wTop = Y0 + math.max(bank - 0.7, 0.3)
-									h = math.max(bank - 2.4 - 1.4 * (1 - d / rw), -1.5)
-									mat = VISIBLE.SeaFloor
+									-- Banks slope down to just above the water.
+									local t = smoothstep(rw, rw * 2.4, d)
+									h = (wl + 1.2) + (ground - (wl + 1.2)) * t
+									if not sepia and t < 0.5 and tt ~= "Mountains" then
+										mat = VISIBLE.Grass
+									end
 								end
 							end
 						end
 
-						-- Neutral territory border line (drawn by the lower id only,
-						-- and only between two known land territories).
+						-- Neutral territory border line: the edge column on each side of
+						-- a border between two known land territories.
 						local isBorder = false
 						for _, step in { { 1, 0 }, { -1, 0 }, { 0, 1 }, { 0, -1 } } do
 							local ni, nj = i + step[1], j + step[2]
 							if ni >= 0 and nj >= 0 and ni < cols and nj < self.rows then
 								local o = buffer.readu16(self.owner, (nj * cols + ni) * 2)
-								if o ~= id and o > id then
+								if o ~= id then
 									local orec = self.state:get(o)
 									if orec and orec.terrainType and orec.state ~= "Unexplored" and not isWaterType(orec.terrainType) then
 										isBorder = true
