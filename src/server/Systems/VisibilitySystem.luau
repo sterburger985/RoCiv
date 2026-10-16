@@ -55,12 +55,16 @@ local function stateOf(ps: PlayerState, id: number): VisibilityState
 	return "Unexplored"
 end
 
--- Breadth-first search over the neighbour graph up to `range` hops.
+-- Breadth-first search over the neighbour graph up to `range` hops. Each
+-- source gets its own visited set: sharing one with other sources would
+-- stop this flood wherever another source already reached (bug found in
+-- testing: a wide source inside a narrow one revealed nothing extra).
 local function floodFrom(startId: number, range: number, into: { [number]: boolean })
 	local start = TerritorySystem.get(startId)
 	if not start then
 		return
 	end
+	local seen: { [number]: boolean } = { [startId] = true }
 	into[startId] = true
 	local frontier = { startId }
 	for _ = 1, range do
@@ -69,7 +73,8 @@ local function floodFrom(startId: number, range: number, into: { [number]: boole
 			local t = TerritorySystem.get(id)
 			if t then
 				for _, nb in t.neighbors do
-					if not into[nb] then
+					if not seen[nb] then
+						seen[nb] = true
 						into[nb] = true
 						table.insert(nextFrontier, nb)
 					end

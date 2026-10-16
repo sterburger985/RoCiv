@@ -5,19 +5,30 @@
     "ReplicatedStorage": {
       "RoCiv": {
         "$className": "Folder",
-        "Shared": { "$path": "src/shared" }
+        "Shared": {
+          "$path": "src/shared"
+        }
       }
     },
     "ServerScriptService": {
       "RoCiv": {
         "$className": "Folder",
-        "MapService": { "$path": "src/server/MapService.server.luau" },
-        "Map": { "$path": "src/server/Map" }
+        "MapService": {
+          "$path": "src/server/MapService.server.luau"
+        },
+        "Map": {
+          "$path": "src/server/Map"
+        },
+        "Systems": {
+          "$path": "src/server/Systems"
+        }
       }
     },
     "StarterPlayer": {
       "StarterPlayerScripts": {
-        "RoCiv": { "$path": "src/client" }
+        "RoCiv": {
+          "$path": "src/client"
+        }
       }
     }
   }
