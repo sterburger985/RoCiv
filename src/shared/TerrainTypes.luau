@@ -2,7 +2,8 @@
 -- TerrainTypes
 -- Definitions for every terrain type used by the strategic map.
 -- Gameplay systems should read terrain properties from here rather than
--- hard-coding values. Movement values are placeholders for Phase 3.
+-- hard-coding values. `color` is the swatch shown in UI; the map itself is
+-- drawn as voxel terrain by the client TerrainPainter.
 
 export type TerrainDef = {
 	id: string,
@@ -12,9 +13,6 @@ export type TerrainDef = {
 	baseFertility: number, -- 0..1
 	moveCost: number, -- cost to enter a region of this terrain (Phase 3)
 	passableByLand: boolean,
-	surfaceHeight: number, -- tile height offset in studs (presentation)
-	decoration: string?, -- "Trees" | "Peaks" | "Snow" | "Dunes" | "Fields" | "Meadow" | "Waves" | nil (presentation)
-	decorationColor: Color3?,
 }
 
 local TerrainTypes = {}
@@ -28,9 +26,6 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.15,
 		moveCost = 1,
 		passableByLand = false,
-		surfaceHeight = -0.9,
-		decoration = "Waves",
-		decorationColor = Color3.fromRGB(96, 140, 196),
 	},
 	{
 		-- Coast = shallow water next to land (Civilization convention).
@@ -41,7 +36,16 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.35,
 		moveCost = 1,
 		passableByLand = false,
-		surfaceHeight = -0.6,
+	},
+	{
+		-- Lake = inland fresh water (not connected to the ocean).
+		id = "Lake",
+		displayName = "Lake",
+		color = Color3.fromRGB(64, 132, 170),
+		isWater = true,
+		baseFertility = 0.4,
+		moveCost = 1,
+		passableByLand = false,
 	},
 	{
 		id = "Grassland",
@@ -51,9 +55,6 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.75,
 		moveCost = 1,
 		passableByLand = true,
-		surfaceHeight = 0,
-		decoration = "Meadow",
-		decorationColor = Color3.fromRGB(86, 146, 58),
 	},
 	{
 		id = "Plains",
@@ -63,9 +64,6 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.6,
 		moveCost = 1,
 		passableByLand = true,
-		surfaceHeight = 0,
-		decoration = "Fields",
-		decorationColor = Color3.fromRGB(172, 150, 66),
 	},
 	{
 		id = "Forest",
@@ -75,9 +73,6 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.45,
 		moveCost = 2,
 		passableByLand = true,
-		surfaceHeight = 0.15,
-		decoration = "Trees",
-		decorationColor = Color3.fromRGB(28, 82, 44),
 	},
 	{
 		id = "Desert",
@@ -87,9 +82,6 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.12,
 		moveCost = 1,
 		passableByLand = true,
-		surfaceHeight = 0.05,
-		decoration = "Dunes",
-		decorationColor = Color3.fromRGB(196, 160, 92),
 	},
 	{
 		id = "Tundra",
@@ -99,9 +91,6 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.2,
 		moveCost = 1,
 		passableByLand = true,
-		surfaceHeight = 0.1,
-		decoration = "Snow",
-		decorationColor = Color3.fromRGB(236, 240, 244),
 	},
 	{
 		id = "Mountains",
@@ -111,9 +100,6 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.05,
 		moveCost = 3,
 		passableByLand = true,
-		surfaceHeight = 1.4,
-		decoration = "Peaks",
-		decorationColor = Color3.fromRGB(96, 84, 76),
 	},
 }
 

@@ -48,13 +48,21 @@ local function applyMapLighting()
 	Lighting.Brightness = MapConfig.LIGHTING_BRIGHTNESS
 	Lighting.ExposureCompensation = MapConfig.LIGHTING_EXPOSURE
 	Lighting.EnvironmentSpecularScale = MapConfig.LIGHTING_ENV_SPECULAR
+	Lighting.GlobalShadows = true
+	Lighting.ShadowSoftness = MapConfig.LIGHTING_SHADOW_SOFTNESS
+	Lighting.Ambient = MapConfig.LIGHTING_AMBIENT
+	Lighting.OutdoorAmbient = MapConfig.LIGHTING_OUTDOOR_AMBIENT
+	Lighting.EnvironmentDiffuseScale = MapConfig.LIGHTING_ENV_DIFFUSE
+	Lighting.GeographicLatitude = MapConfig.LIGHTING_LATITUDE
 	local cc = Lighting:FindFirstChild("RoCivMapColor")
 	if not cc then
 		cc = Instance.new("ColorCorrectionEffect")
 		cc.Name = "RoCivMapColor"
 		cc.Parent = Lighting
 	end
-	(cc :: ColorCorrectionEffect).Saturation = MapConfig.LIGHTING_SATURATION
+	(cc :: ColorCorrectionEffect).Saturation = MapConfig.LIGHTING_SATURATION;
+	(cc :: ColorCorrectionEffect).Contrast = MapConfig.LIGHTING_CONTRAST;
+	(cc :: ColorCorrectionEffect).TintColor = MapConfig.LIGHTING_TINT
 end
 applyMapLighting()
 
@@ -107,8 +115,8 @@ end
 
 if RunService:IsStudio() and devRemote and devCommand then
 	devPanel = DevMapPanel.new({
-		regenerate = function(seed, count)
-			devRemote:FireServer(seed, count)
+		regenerate = function(seed, matchSize)
+			devRemote:FireServer(seed, matchSize)
 		end,
 		command = function(cmd)
 			local ok, res = pcall(function()
@@ -171,6 +179,11 @@ state:onChanged(function(ids)
 	player:SetAttribute("MapStateSeq", state.seq)
 end)
 
+-- Terrain painting finished for some territories: outlines follow it.
+renderer:onSurfaceChanged(function(ids)
+	selection:surfaceChanged(ids)
+end)
+
 -- Civilization list changes (names/colours/controllers): restyle everything.
 state:onCivilizationsChanged(function()
 	TerritoryStyle.setCivilizations(state.civilizations)
@@ -184,6 +197,25 @@ state:onCivilizationsChanged(function()
 	end
 	player:SetAttribute("YourCivilizationId", state.yourCivilizationId or 0)
 end)
+
+-- Studio test hook: setting the LocalPlayer attribute "RunFogCheck" runs
+-- the slow voxel-level fog check (every unexplored territory's columns must
+-- be empty once painting has finished) and reports the result.
+if RunService:IsStudio() then
+	player:GetAttributeChangedSignal("RunFogCheck"):Connect(function()
+		if not player:GetAttribute("RunFogCheck") or not renderer.state then
+			return
+		end
+		local t0 = os.clock()
+		local leaks = renderer:deepFogCheck(state)
+		local ok = renderer:validate(state)
+		player:SetAttribute("FogCheckLeaks", #leaks)
+		player:SetAttribute("FogCheckRenderOk", ok)
+		player:SetAttribute("FogCheckMs", (os.clock() - t0) * 1000)
+		player:SetAttribute("RunFogCheck", false)
+		print(string.format("[ClientMain] Deep fog check: %d leaking territories, render check %s", #leaks, if ok then "PASS" else "FAIL"))
+	end)
+end
 
 local loading = false
 local pendingReload = false

@@ -5,17 +5,23 @@
 -- Pipeline:
 --   1. Scatter N seed points with Random.new(seed).
 --   2. Lloyd relaxation (Voronoi -> move each point to its cell centroid).
---   3. Final Voronoi cells via half-plane clipping of the map rectangle.
---      Every clipped edge is tagged with the site that produced it, which
---      gives exact shared-edge adjacency for free.
---   4. Elevation / moisture from seeded multi-octave noise.
---   5. Terrain rules (sea level by quantile, edge ocean, lake fill, coast,
---      mountains, tundra, desert / plains / grassland / forest).
+--   3. Final Voronoi cells via half-plane clipping of the map rectangle
+--      (grid-accelerated). Every clipped edge is tagged with the site that
+--      produced it, which gives exact shared-edge adjacency for free.
+--   4. Geography: an elevation field built from shaped continents (domain-
+--      warped ellipses) plus peninsulas, bays, archipelagos and ridged
+--      mountain chains; moisture and latitude noise.
+--   5. Terrain rules: sea level by quantile, edge ocean, lakes (small inland
+--      water bodies), coast, mountains, tundra, desert / plains / grassland
+--      / forest.
+--   6. Rivers (downhill across territories to the sea or a lake) and start
+--      positions for the match size's civilizations.
+--   7. The continent count is checked; if the map misses its target, it is
+--      regenerated with a deterministically derived seed (attempts recorded).
 --
 -- The generator is pure: it touches no Instances and returns plain data.
--- It lives on the server so clients cannot regenerate hidden map data
--- (important once resources and fog of war exist).
--- The same seed + settings always produce the same logical map.
+-- It lives on the server so clients cannot regenerate hidden map data.
+-- The same seed + match size always produce the same logical map.
 
 local Shared = game:GetService("ReplicatedStorage"):WaitForChild("RoCiv"):WaitForChild("Shared")
 local Geometry = require(Shared:WaitForChild("Geometry"))
@@ -36,6 +42,9 @@ export type Territory = {
 	fertility: number, -- 0..1
 	moisture: number, -- 0..1
 	latitude: number, -- 0 (equator) .. 1 (pole)
+	landmassId: number, -- 0 for water
+	riverPath: { Vector2 }?, -- river polyline inside this territory (if any)
+	riverId: number?,
 	resources: { any }, -- placeholder (resource phase)
 	ownerId: number?, -- civilizationId, nil = unowned (change only via TerritorySystem)
 	cityId: number?, -- nil = no city
@@ -47,8 +56,14 @@ export type Territory = {
 	},
 }
 
+export type River = { id: number, territoryIds: { number }, mouth: number }
+
 export type MapData = {
 	seed: number,
+	baseSeed: number,
+	attempt: number,
+	matchSize: string,
+	civilizations: number,
 	territoryCount: number,
 	width: number,
 	height: number,
@@ -56,12 +71,17 @@ export type MapData = {
 	mountainLevel: number,
 	territories: { [number]: Territory },
 	territoryIds: { number },
+	landmasses: { { id: number, size: number, isContinent: boolean } },
+	continentCount: number,
+	rivers: { River },
+	startPositions: { number }, -- territory ids, one per civilization (server only)
 	stats: { [string]: any },
 }
 
 export type GenerateOptions = {
 	seed: number?,
-	territoryCount: number?,
+	matchSize: string?,
+	territoryCount: number?, -- overrides the match size's count (dev/testing)
 	width: number?,
 	height: number?,
 }
@@ -70,6 +90,9 @@ local MapGenerator = {}
 
 -- Voronoi ----------------------------------------------------------------
 
+-- Grid-accelerated Voronoi: each cell is clipped only by nearby sites. The
+-- search radius grows until it provably covers every site that could cut
+-- the cell (any cutting site lies within 2 * the cell's max vertex radius).
 local function computeCells(sites: { Vector2 }, width: number, height: number)
 	local n = #sites
 	local polys = table.create(n)
@@ -80,47 +103,78 @@ local function computeCells(sites: { Vector2 }, width: number, height: number)
 		Vector2.new(width, height),
 		Vector2.new(0, height),
 	}
+	local cell = math.sqrt(width * height / math.max(n, 1))
+	local cols = math.max(1, math.ceil(width / cell))
+	local rows = math.max(1, math.ceil(height / cell))
+	local grid: { [number]: { number } } = {}
+	for i, s in sites do
+		local cx = math.clamp(math.floor(s.X / cell), 0, cols - 1)
+		local cy = math.clamp(math.floor(s.Y / cell), 0, rows - 1)
+		local key = cy * cols + cx
+		grid[key] = grid[key] or {}
+		table.insert(grid[key], i)
+	end
 
 	for i = 1, n do
 		local s = sites[i]
-		-- Other sites sorted by distance so we can stop early.
-		local order = table.create(n - 1)
-		local dist2 = table.create(n)
-		for j = 1, n do
-			if j ~= i then
-				local d = sites[j] - s
-				dist2[j] = d.X * d.X + d.Y * d.Y
-				table.insert(order, j)
+		local scx = math.clamp(math.floor(s.X / cell), 0, cols - 1)
+		local scy = math.clamp(math.floor(s.Y / cell), 0, rows - 1)
+		local r = 2
+		local poly, tags
+		while true do
+			local order = {}
+			local dist2 = {}
+			for gy = math.max(0, scy - r), math.min(rows - 1, scy + r) do
+				for gx = math.max(0, scx - r), math.min(cols - 1, scx + r) do
+					local bucket = grid[gy * cols + gx]
+					if bucket then
+						for _, j in bucket do
+							if j ~= i then
+								local d = sites[j] - s
+								dist2[j] = d.X * d.X + d.Y * d.Y
+								table.insert(order, j)
+							end
+						end
+					end
+				end
 			end
-		end
-		table.sort(order, function(a, b)
-			local da, db = dist2[a], dist2[b]
-			if da == db then
-				return a < b
-			end
-			return da < db
-		end)
-
-		local poly = table.clone(corners)
-		local tags = { 0, 0, 0, 0 }
-		local maxR2 = 0
-		for _, p in poly do
-			local d = p - s
-			maxR2 = math.max(maxR2, d.X * d.X + d.Y * d.Y)
-		end
-
-		for _, j in order do
-			-- A site farther than 2 * (furthest vertex) cannot cut the cell.
-			if dist2[j] * 0.25 > maxR2 then
-				break
-			end
-			local o = sites[j]
-			poly, tags = Geometry.clipHalfPlane(poly, tags, (s + o) * 0.5, o - s, j)
-			maxR2 = 0
+			table.sort(order, function(a, b)
+				local da, db = dist2[a], dist2[b]
+				if da == db then
+					return a < b
+				end
+				return da < db
+			end)
+			poly = table.clone(corners)
+			tags = { 0, 0, 0, 0 }
+			local maxR2 = 0
 			for _, p in poly do
 				local d = p - s
 				maxR2 = math.max(maxR2, d.X * d.X + d.Y * d.Y)
 			end
+			for _, j in order do
+				if dist2[j] * 0.25 > maxR2 then
+					break
+				end
+				local o = sites[j]
+				poly, tags = Geometry.clipHalfPlane(poly, tags, (s + o) * 0.5, o - s, j)
+				maxR2 = 0
+				for _, p in poly do
+					local d = p - s
+					maxR2 = math.max(maxR2, d.X * d.X + d.Y * d.Y)
+				end
+			end
+			local searchedAll = scx - r <= 0 and scy - r <= 0 and scx + r >= cols - 1 and scy + r >= rows - 1
+			-- Squares clipped by the map edge still cover the whole edge side.
+			local coverX0 = if scx - r <= 0 then math.huge else s.X - (scx - r) * cell
+			local coverX1 = if scx + r >= cols - 1 then math.huge else (scx + r + 1) * cell - s.X
+			local coverY0 = if scy - r <= 0 then math.huge else s.Y - (scy - r) * cell
+			local coverY1 = if scy + r >= rows - 1 then math.huge else (scy + r + 1) * cell - s.Y
+			local covered = math.min(coverX0, coverX1, coverY0, coverY1)
+			if searchedAll or 2 * math.sqrt(maxR2) <= covered then
+				break
+			end
+			r += 2
 		end
 		polys[i] = poly
 		tagsList[i] = tags
@@ -128,7 +182,7 @@ local function computeCells(sites: { Vector2 }, width: number, height: number)
 	return polys, tagsList
 end
 
--- Noise --------------------------------------------------------------------
+-- Noise and helpers ------------------------------------------------------------
 
 local function fbm(x: number, y: number, z: number, octaves: number): number
 	local total, amp, freq, norm = 0, 1, 1, 0
@@ -139,6 +193,13 @@ local function fbm(x: number, y: number, z: number, octaves: number): number
 		freq *= 2
 	end
 	return total / norm -- roughly -0.5..0.5
+end
+
+-- Ridged noise: 1 along "ridges", 0 elsewhere (mountain chains).
+local function ridged(x: number, y: number, z: number): number
+	local n = 1 - math.abs(math.noise(x, y, z) * 2)
+	n = math.clamp(n, 0, 1)
+	return n * n
 end
 
 local function clamp01(v: number): number
@@ -160,31 +221,237 @@ local function quantile(values: { number }, q: number): number
 	return sorted[idx]
 end
 
+local function segDist(p: Vector2, a: Vector2, b: Vector2): number
+	local ab = b - a
+	local len2 = ab:Dot(ab)
+	if len2 < 1e-9 then
+		return (p - a).Magnitude
+	end
+	local t = math.clamp((p - a):Dot(ab) / len2, 0, 1)
+	return (p - (a + ab * t)).Magnitude
+end
+
+function MapGenerator.matchSizeDef(name: string?): any
+	local key = name or MapConfig.DEFAULT_MATCH_SIZE
+	return MapConfig.MATCH_SIZES[key] or MapConfig.MATCH_SIZES[MapConfig.DEFAULT_MATCH_SIZE]
+end
+
+-- Geography field ----------------------------------------------------------------
+-- All shapes work in normalised coordinates: u in [0, aspect], v in [0, 1].
+
+type Shape = { kind: string, a: Vector2, b: Vector2?, rx: number, ry: number, rot: number, strength: number, owner: number }
+
+local function buildShapes(rng: Random, def: any, aspect: number)
+	local shapes: { Shape } = {}
+	local bays: { Shape } = {}
+	local k = rng:NextInteger(def.continents[1], def.continents[2])
+	-- Continent centres: spread out with rejection sampling.
+	local centres: { Vector2 } = {}
+	local minSep = 0.9 / math.sqrt(k) -- in v units
+	local guard = 0
+	while #centres < k and guard < 4000 do
+		guard += 1
+		local c = Vector2.new(rng:NextNumber(0.2, aspect - 0.2), rng:NextNumber(0.22, 0.78))
+		local ok = true
+		for _, o in centres do
+			if (c - o).Magnitude < minSep then
+				ok = false
+				break
+			end
+		end
+		if ok then
+			table.insert(centres, c)
+		end
+		if guard % 500 == 0 then
+			minSep *= 0.9 -- relax if the map is crowded
+		end
+	end
+	local landArea = aspect * def.landFraction
+	for ci, c in centres do
+		-- Each continent gets a similar share of the land; vary it a little.
+		local share = landArea / #centres * rng:NextNumber(0.8, 1.25)
+		local elong = rng:NextNumber(1.1, 1.9)
+		local ry = math.sqrt(share / (math.pi * elong)) * 1.15
+		local rx = ry * elong
+		local rot = rng:NextNumber(0, math.pi)
+		table.insert(shapes, { kind = "Continent", a = c, rx = rx, ry = ry, rot = rot, strength = 1, owner = ci })
+
+		-- Peninsulas: capsules reaching out from the coast.
+		for _ = 1, rng:NextInteger(def.peninsulas[1], def.peninsulas[2]) do
+			local ang = rng:NextNumber(0, math.pi * 2)
+			local dir = Vector2.new(math.cos(ang), math.sin(ang))
+			local edge = c + Vector2.new(dir.X * rx * math.cos(rot) - dir.Y * ry * math.sin(rot), dir.X * rx * math.sin(rot) + dir.Y * ry * math.cos(rot)) * 0.75
+			local outward = (edge - c).Unit
+			local len = ry * rng:NextNumber(0.7, 1.2)
+			local bend = Vector2.new(-outward.Y, outward.X) * rng:NextNumber(-0.3, 0.3)
+			local tip = edge + (outward + bend).Unit * len
+			table.insert(shapes, { kind = "Peninsula", a = edge, b = tip, rx = ry * rng:NextNumber(0.18, 0.28), ry = 0, rot = 0, strength = 0.85, owner = ci })
+		end
+		-- Bays: notches cut into the coast.
+		for _ = 1, rng:NextInteger(def.bays[1], def.bays[2]) do
+			local ang = rng:NextNumber(0, math.pi * 2)
+			local dir = Vector2.new(math.cos(ang), math.sin(ang))
+			local edge = c + Vector2.new(dir.X * rx * math.cos(rot) - dir.Y * ry * math.sin(rot), dir.X * rx * math.sin(rot) + dir.Y * ry * math.cos(rot)) * 0.92
+			table.insert(bays, { kind = "Bay", a = edge, rx = ry * rng:NextNumber(0.25, 0.4), ry = 0, rot = 0, strength = 1.1, owner = 0 })
+		end
+	end
+	-- Archipelagos: clusters of small islands away from the continents.
+	local islands: { Shape } = {}
+	for cluster = 1, def.islandClusters do
+		local centre: Vector2? = nil
+		for _ = 1, 200 do
+			local c = Vector2.new(rng:NextNumber(0.1, aspect - 0.1), rng:NextNumber(0.12, 0.88))
+			local far = true
+			for _, sh in shapes do
+				if sh.kind == "Continent" and (c - sh.a).Magnitude < math.max(sh.rx, sh.ry) * 1.25 then
+					far = false
+					break
+				end
+			end
+			if far then
+				centre = c
+				break
+			end
+		end
+		if centre then
+			for _ = 1, rng:NextInteger(4, 7) do
+				local p = centre + Vector2.new(rng:NextNumber(-0.11, 0.11), rng:NextNumber(-0.09, 0.09))
+				table.insert(islands, { kind = "Island", a = p, rx = rng:NextNumber(0.022, 0.04), ry = 0, rot = 0, strength = 0.75, owner = 100 + cluster })
+			end
+		end
+	end
+	return shapes, bays, islands, #centres
+end
+
+local function sampleElevation(p: Vector2, shapes: { Shape }, bays: { Shape }, islands: { Shape }, noiseOff: Vector3, aspect: number): (number, number)
+	-- Domain warp gives coasts an organic outline.
+	local wx = fbm(p.X * 3.1 + noiseOff.X, p.Y * 3.1 + noiseOff.Y, noiseOff.Z, 3) * 0.12
+	local wy = fbm(p.X * 3.1 + noiseOff.Y, p.Y * 3.1 + noiseOff.X, noiseOff.Z + 11, 3) * 0.12
+	local q = p + Vector2.new(wx, wy)
+	local e = -0.6
+	local owner = 0
+	for _, sh in shapes do
+		local v
+		if sh.kind == "Continent" then
+			local d = q - sh.a
+			local cs, sn = math.cos(-sh.rot), math.sin(-sh.rot)
+			local lx = d.X * cs - d.Y * sn
+			local ly = d.X * sn + d.Y * cs
+			local r = math.sqrt((lx / sh.rx) ^ 2 + (ly / sh.ry) ^ 2)
+			v = (1 - r) * sh.strength
+		else -- Peninsula capsule
+			v = (1 - segDist(q, sh.a, sh.b :: Vector2) / sh.rx) * sh.strength * 0.7
+		end
+		if v > e then
+			e = v
+			owner = sh.owner
+		end
+	end
+	for _, sh in islands do
+		local v = (1 - (q - sh.a).Magnitude / sh.rx) * sh.strength
+		if v > e then
+			e = v
+			owner = sh.owner
+		end
+	end
+	for _, sh in bays do
+		local d = (q - sh.a).Magnitude / sh.rx
+		if d < 1 then
+			e -= (1 - d) * (1 - d) * sh.strength
+		end
+	end
+	-- Detail noise and mountain chains (ridges only on land).
+	e += fbm(p.X * 5 + noiseOff.Z, p.Y * 5 + noiseOff.X, noiseOff.Y, 4) * 0.35
+	if e > 0 then
+		e += ridged(p.X * 3.2 + noiseOff.Y, p.Y * 3.2 + noiseOff.Z, noiseOff.X) * 0.45 * math.clamp(e * 3, 0, 1)
+	end
+	-- Ocean ring at the map edge.
+	local dx = math.min(p.X, aspect - p.X) / aspect
+	local dy = math.min(p.Y, 1 - p.Y)
+	local edge = math.min(dx * 2.2, dy)
+	e -= (1 - smoothstep(0.0, 0.12, edge)) * 1.2
+	return e, owner
+end
+
+-- Landmasses ----------------------------------------------------------------------
+
+local function labelLandmasses(territories: { [number]: Territory }, ids: { number })
+	local masses = {}
+	for _, id in ids do
+		territories[id].landmassId = 0
+	end
+	local nextId = 0
+	for _, id in ids do
+		local t = territories[id]
+		if not t.isWater and t.landmassId == 0 then
+			nextId += 1
+			t.landmassId = nextId
+			local q, h = { id }, 1
+			while h <= #q do
+				local cur = q[h]
+				h += 1
+				for _, nb in territories[cur].neighbors do
+					local o = territories[nb]
+					if not o.isWater and o.landmassId == 0 then
+						o.landmassId = nextId
+						table.insert(q, nb)
+					end
+				end
+			end
+			table.insert(masses, { id = nextId, size = #q, isContinent = false })
+		end
+	end
+	local land = 0
+	for _, m in masses do
+		land += m.size
+	end
+	local continents = 0
+	for _, m in masses do
+		m.isContinent = m.size >= MapConfig.CONTINENT_MIN_TERRITORIES and m.size >= land * MapConfig.CONTINENT_MIN_LAND_SHARE
+		if m.isContinent then
+			continents += 1
+		end
+	end
+	table.sort(masses, function(a, b)
+		return a.size > b.size
+	end)
+	return masses, continents
+end
+
+-- Hop distances over land from a set of sources.
+local function landDistances(territories: { [number]: Territory }, sources: { number }): { [number]: number }
+	local dist: { [number]: number } = {}
+	local q = {}
+	for _, s in sources do
+		dist[s] = 0
+		table.insert(q, s)
+	end
+	local h = 1
+	while h <= #q do
+		local cur = q[h]
+		h += 1
+		for _, nb in territories[cur].neighbors do
+			if dist[nb] == nil and not territories[nb].isWater then
+				dist[nb] = dist[cur] + 1
+				table.insert(q, nb)
+			end
+		end
+	end
+	return dist
+end
+
 -- Generation ---------------------------------------------------------------
 
-function MapGenerator.generate(options: GenerateOptions?): MapData
-	local opts = options or {}
+local function generateOnce(seed: number, def: any, count: number, width: number, height: number)
 	local t0 = os.clock()
-	local seed = math.floor(opts.seed or MapConfig.DEFAULT_SEED)
-	local count = math.clamp(
-		math.floor(opts.territoryCount or MapConfig.DEFAULT_TERRITORY_COUNT),
-		MapConfig.MIN_TERRITORY_COUNT,
-		MapConfig.MAX_TERRITORY_COUNT
-	)
-	local autoW, autoH = MapConfig.mapSizeFor(count)
-	local width = opts.width or autoW
-	local height = opts.height or autoH
-
 	local rng = Random.new(seed)
+	local aspect = width / height
 
 	-- 1. Seed points (kept slightly away from the edges).
 	local margin = 0.01
 	local sites: { Vector2 } = table.create(count)
 	for i = 1, count do
-		sites[i] = Vector2.new(
-			rng:NextNumber(width * margin, width * (1 - margin)),
-			rng:NextNumber(height * margin, height * (1 - margin))
-		)
+		sites[i] = Vector2.new(rng:NextNumber(width * margin, width * (1 - margin)), rng:NextNumber(height * margin, height * (1 - margin)))
 	end
 
 	-- 2. Lloyd relaxation.
@@ -199,17 +466,14 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 	local polys, tagsList = computeCells(sites, width, height)
 	local tVoronoi = os.clock()
 
-	-- Territory ids are explicit, stable values stored on the record. They are
-	-- assigned 1..N from the seeded site order; nothing else (instance names,
-	-- colours, positions) is used as identity.
+	-- Territory ids are explicit, stable values stored on the record.
 	local territories: { [number]: Territory } = {}
 	local ids: { number } = table.create(count)
 	for i = 1, count do
 		local poly = polys[i]
-		local id = i
-		ids[i] = id
-		territories[id] = {
-			id = id,
+		ids[i] = i
+		territories[i] = {
+			id = i,
 			site = sites[i],
 			centroid = Geometry.centroid(poly),
 			polygon = poly,
@@ -222,6 +486,9 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 			fertility = 0,
 			moisture = 0,
 			latitude = 0,
+			landmassId = 0,
+			riverPath = nil,
+			riverId = nil,
 			resources = {},
 			ownerId = nil,
 			cityId = nil,
@@ -252,8 +519,6 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 		end
 		table.sort(t.neighbors)
 	end
-	-- Enforce symmetry: only keep a link if both sides agree. (Shared edges
-	-- are the same segment, so this only matters at the length threshold.)
 	for _, id in ids do
 		local t = territories[id]
 		local kept = {}
@@ -265,38 +530,24 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 		t.neighbors = kept
 	end
 
-	-- 4. Elevation & moisture.
-	local ex, ey = rng:NextNumber(-10000, 10000), rng:NextNumber(-10000, 10000)
-	local mx, my = rng:NextNumber(-10000, 10000), rng:NextNumber(-10000, 10000)
-	local ez, mz = rng:NextNumber(0, 100), rng:NextNumber(0, 100)
+	-- 4. Geography field.
+	local shapes, bays, islands, continentTarget = buildShapes(rng, def, aspect)
+	local noiseOff = Vector3.new(rng:NextNumber(-500, 500), rng:NextNumber(-500, 500), rng:NextNumber(0, 100))
+	local mx, my, mz = rng:NextNumber(-10000, 10000), rng:NextNumber(-10000, 10000), rng:NextNumber(0, 100)
 	local tundraJitter = {}
 	local rawElev: { [number]: number } = {}
+	local shapeOwner: { [number]: number } = {}
 	local minE, maxE = math.huge, -math.huge
 	for _, id in ids do
 		local t = territories[id]
-		local nx = t.centroid.X / width
-		local ny = t.centroid.Y / height
-		local aspect = width / height
-		local e = fbm(
-			nx * MapConfig.ELEVATION_FREQUENCY * aspect + ex,
-			ny * MapConfig.ELEVATION_FREQUENCY + ey,
-			ez,
-			MapConfig.ELEVATION_OCTAVES
-		)
-		local dx = math.abs(nx - 0.5) * 2
-		local dy = math.abs(ny - 0.5) * 2
-		local d = math.max(dx, dy) * 0.7 + math.sqrt(dx * dx + dy * dy) * 0.3
-		e -= smoothstep(MapConfig.EDGE_FALLOFF_START, 1.0, d) * MapConfig.EDGE_FALLOFF_STRENGTH
+		local p = Vector2.new(t.centroid.X / height, t.centroid.Y / height) -- u in [0, aspect]
+		local e, owner = sampleElevation(p, shapes, bays, islands, noiseOff, aspect)
 		rawElev[id] = e
+		shapeOwner[id] = owner
 		minE = math.min(minE, e)
 		maxE = math.max(maxE, e)
-
-		local m = fbm(
-			nx * MapConfig.MOISTURE_FREQUENCY * aspect + mx,
-			ny * MapConfig.MOISTURE_FREQUENCY + my,
-			mz,
-			MapConfig.MOISTURE_OCTAVES
-		)
+		local nx, ny = t.centroid.X / width, t.centroid.Y / height
+		local m = fbm(nx * MapConfig.MOISTURE_FREQUENCY * aspect + mx, ny * MapConfig.MOISTURE_FREQUENCY + my, mz, MapConfig.MOISTURE_OCTAVES)
 		t.moisture = clamp01(0.5 + m * 1.6)
 		t.latitude = math.abs(ny - 0.5) * 2
 		tundraJitter[id] = rng:NextNumber(-1, 1) * MapConfig.TUNDRA_LATITUDE_JITTER
@@ -310,23 +561,42 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 	end
 
 	-- 5. Terrain.
-	local seaLevel = quantile(elevList, 1 - MapConfig.LAND_FRACTION)
+	local seaLevel = quantile(elevList, 1 - def.landFraction)
 	for _, id in ids do
 		local t = territories[id]
-		if MapConfig.FORCE_EDGE_OCEAN and touchesEdge[id] and t.elevation >= seaLevel then
-			-- Keep elevation consistent with the water rule.
+		if touchesEdge[id] and t.elevation >= seaLevel then
 			t.elevation = math.max(0, seaLevel - 0.001)
 		end
 		t.isWater = t.elevation < seaLevel
 	end
+	-- Keep continents apart: where land of two different shapes (continents
+	-- or archipelagos) touches, the lower side becomes sea. This guarantees
+	-- the match size's continent count instead of noise merging them.
+	local straits = 0
+	for _, id in ids do
+		local t = territories[id]
+		if not t.isWater then
+			for _, nb in t.neighbors do
+				local o = territories[nb]
+				if not o.isWater and shapeOwner[nb] ~= shapeOwner[id] then
+					local low = if o.elevation < t.elevation or (o.elevation == t.elevation and nb < id) then o else t
+					low.isWater = true
+					low.elevation = math.max(0, seaLevel - 0.001)
+					straits += 1
+					if low == t then
+						break
+					end
+				end
+			end
+		end
+	end
 
-	-- Lake fill: water bodies not connected to the outer ocean become land.
-	-- (Lakes are a later terrain type; Phase 1 has no inland water.)
+	-- Water bodies not connected to the outer ocean: small ones become
+	-- Lakes, large ones are filled to land.
 	local reached: { [number]: boolean } = {}
 	local queue = {}
 	for _, id in ids do
-		local t = territories[id]
-		if t.isWater and touchesEdge[id] then
+		if territories[id].isWater and touchesEdge[id] then
 			reached[id] = true
 			table.insert(queue, id)
 		end
@@ -342,13 +612,81 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 			end
 		end
 	end
+	local isLake: { [number]: boolean } = {}
 	local lakesFilled = 0
+	local seenInland: { [number]: boolean } = {}
+	for _, id in ids do
+		if territories[id].isWater and not reached[id] and not seenInland[id] then
+			local body, q2, h2 = {}, { id }, 1
+			seenInland[id] = true
+			while h2 <= #q2 do
+				local cur = q2[h2]
+				h2 += 1
+				table.insert(body, cur)
+				for _, nb in territories[cur].neighbors do
+					if territories[nb].isWater and not reached[nb] and not seenInland[nb] then
+						seenInland[nb] = true
+						table.insert(q2, nb)
+					end
+				end
+			end
+			if #body <= MapConfig.LAKE_MAX_TERRITORIES then
+				for _, b in body do
+					isLake[b] = true
+				end
+			else
+				for _, b in body do
+					territories[b].isWater = false
+					territories[b].elevation = seaLevel
+					lakesFilled += 1
+				end
+			end
+		end
+	end
+	-- Extra lakes in damp, low inland territories (no sea neighbours),
+	-- kept a few territories apart so each reads as its own lake.
+	local lakeCandidates = {}
+	local lakeScore: { [number]: number } = {}
 	for _, id in ids do
 		local t = territories[id]
-		if t.isWater and not reached[id] then
-			t.isWater = false
-			t.elevation = seaLevel
-			lakesFilled += 1
+		if not t.isWater and t.latitude < 0.75 then
+			local inland = true
+			for _, nb in t.neighbors do
+				if territories[nb].isWater then
+					inland = false
+					break
+				end
+			end
+			if inland then
+				table.insert(lakeCandidates, id)
+				lakeScore[id] = t.moisture - (t.elevation - seaLevel) * 2 + rng:NextNumber(0, 0.15)
+			end
+		end
+	end
+	table.sort(lakeCandidates, function(x, y)
+		if lakeScore[x] == lakeScore[y] then
+			return x < y
+		end
+		return lakeScore[x] > lakeScore[y]
+	end)
+	local lakesAdded = 0
+	for _, id in lakeCandidates do
+		if lakesAdded >= def.lakes then
+			break
+		end
+		-- No other water within 2 hops (keeps lakes distinct and inland).
+		local clear = true
+		for _, nb in territories[id].neighbors do
+			for _, nb2 in territories[nb].neighbors do
+				if territories[nb2].isWater then
+					clear = false
+				end
+			end
+		end
+		if clear then
+			territories[id].isWater = true
+			isLake[id] = true
+			lakesAdded += 1
 		end
 	end
 
@@ -371,9 +709,10 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 				nearLand = true
 			end
 		end
-
 		local terrain: string
-		if t.isWater then
+		if isLake[id] then
+			terrain = "Lake"
+		elseif t.isWater then
 			terrain = if nearLand then "Coast" else "Ocean"
 		else
 			local moisture = clamp01(t.moisture + (if nearWater then MapConfig.MOISTURE_WATER_BONUS else 0))
@@ -393,13 +732,229 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 			end
 		end
 		t.terrainType = terrain
-		local def = TerrainTypes.ById[terrain]
-		t.fertility = clamp01(def.baseFertility + (t.moisture - 0.5) * 0.3 + rng:NextNumber(-0.05, 0.05))
-		t.movementMetadata = {
-			moveCost = def.moveCost,
-			passableByLand = def.passableByLand,
-			isWater = def.isWater,
-		}
+	end
+
+	local masses, continents = labelLandmasses(territories, ids)
+
+	-- 6a. Rivers: start deep inland on high, damp ground and flow toward the
+	-- nearest water, one territory closer each step (so every river reaches
+	-- the sea or a lake), preferring the lowest next territory.
+	local rivers: { River } = {}
+	local hasRiver: { [number]: boolean } = {}
+	local waterIds = {}
+	for _, id in ids do
+		if territories[id].isWater then
+			table.insert(waterIds, id)
+		end
+	end
+	-- Hop distance from water over land (water = 0).
+	local coastDist: { [number]: number } = {}
+	do
+		local q = {}
+		for _, w in waterIds do
+			coastDist[w] = 0
+			table.insert(q, w)
+		end
+		local h = 1
+		while h <= #q do
+			local cur = q[h]
+			h += 1
+			for _, nb in territories[cur].neighbors do
+				if coastDist[nb] == nil and not territories[nb].isWater then
+					coastDist[nb] = coastDist[cur] + 1
+					table.insert(q, nb)
+				end
+			end
+		end
+	end
+	local sources = {}
+	local sourceScore: { [number]: number } = {}
+	for _, id in ids do
+		local t = territories[id]
+		local cd = coastDist[id] or 0
+		if not t.isWater and cd >= MapConfig.RIVER_MIN_LENGTH and t.moisture > 0.3 and t.terrainType ~= "Desert" then
+			table.insert(sources, id)
+			sourceScore[id] = cd + t.elevation * 2 + rng:NextNumber(0, 2.5)
+		end
+	end
+	table.sort(sources, function(x, y)
+		if sourceScore[x] == sourceScore[y] then
+			return x < y
+		end
+		return sourceScore[x] > sourceScore[y]
+	end)
+	for _, src in sources do
+		if #rivers >= def.rivers then
+			break
+		end
+		-- Keep rivers apart: the source must not touch an existing river.
+		local crowded = hasRiver[src]
+		for _, nb in territories[src].neighbors do
+			if hasRiver[nb] then
+				crowded = true
+			end
+		end
+		if not crowded then
+			local path = { src }
+			local cur = src
+			local mouth = nil
+			local ok = true
+			while true do
+				local t = territories[cur]
+				local cd = coastDist[cur]
+				if cd == 1 then
+					local best = nil
+					for _, nb in t.neighbors do
+						local o = territories[nb]
+						if o.isWater and (best == nil or o.elevation < territories[best].elevation) then
+							best = nb
+						end
+					end
+					mouth = best
+					break
+				end
+				local best = nil
+				for _, nb in t.neighbors do
+					local o = territories[nb]
+					if coastDist[nb] == cd - 1 and not o.isWater and o.terrainType ~= "Mountains" and not hasRiver[nb] then
+						if best == nil or o.elevation < territories[best].elevation then
+							best = nb
+						end
+					end
+				end
+				if not best then
+					ok = false
+					break
+				end
+				table.insert(path, best)
+				cur = best
+			end
+			if ok and mouth and #path >= MapConfig.RIVER_MIN_LENGTH then
+				local rid = #rivers + 1
+				table.insert(rivers, { id = rid, territoryIds = path, mouth = mouth :: number })
+				for _, tid in path do
+					hasRiver[tid] = true
+				end
+			end
+		end
+	end
+	-- River geometry: centroid -> shared-edge midpoint -> next centroid,
+	-- with a little meander. Each territory stores only its own piece.
+	local function sharedEdgeMid(a: number, b: number): Vector2
+		local t = territories[a]
+		local n = #t.polygon
+		for e = 1, n do
+			if t.edgeNeighbors[e] == b then
+				local p, q = t.polygon[e], t.polygon[e % n + 1]
+				return p:Lerp(q, rng:NextNumber(0.35, 0.65))
+			end
+		end
+		return (t.centroid + territories[b].centroid) * 0.5
+	end
+	local function meander(a: Vector2, b: Vector2): Vector2
+		local mid = (a + b) * 0.5
+		local d = b - a
+		local perp = Vector2.new(-d.Y, d.X).Unit
+		return mid + perp * d.Magnitude * rng:NextNumber(-0.18, 0.18)
+	end
+	for _, river in rivers do
+		local path = river.territoryIds
+		local mids = {}
+		for i = 1, #path do
+			local nextId = path[i + 1] or river.mouth
+			mids[i] = sharedEdgeMid(path[i], nextId)
+		end
+		for i, tid in path do
+			local t = territories[tid]
+			local c = t.centroid:Lerp(Geometry.centroid(t.polygon), 0.5)
+			local pts = {}
+			if i > 1 then
+				table.insert(pts, mids[i - 1])
+				table.insert(pts, meander(mids[i - 1], c))
+			end
+			table.insert(pts, c)
+			table.insert(pts, meander(c, mids[i]))
+			table.insert(pts, mids[i])
+			t.riverPath = pts
+			t.riverId = river.id
+		end
+	end
+
+	-- Fertility and movement metadata.
+	for _, id in ids do
+		local t = territories[id]
+		local def2 = TerrainTypes.ById[t.terrainType]
+		local fert = def2.baseFertility + (t.moisture - 0.5) * 0.3 + rng:NextNumber(-0.05, 0.05)
+		if hasRiver[id] then
+			fert += MapConfig.RIVER_FERTILITY_BONUS
+		end
+		t.fertility = clamp01(fert)
+		t.movementMetadata = { moveCost = def2.moveCost, passableByLand = def2.passableByLand, isWater = def2.isWater }
+	end
+
+	-- 6b. Start positions on continents, spread apart.
+	local function startScore(id: number): number
+		local t = territories[id]
+		if t.isWater or t.terrainType == "Mountains" or t.terrainType == "Tundra" or t.terrainType == "Desert" then
+			return -1
+		end
+		local d = landDistances(territories, { id })
+		local near = 0
+		for _, hops in d do
+			if hops <= 2 then
+				near += 1
+			end
+		end
+		return near + t.fertility * 4 + (if hasRiver[id] then 2 else 0)
+	end
+	local continentIds = {}
+	for _, m in masses do
+		if m.isContinent then
+			table.insert(continentIds, m.id)
+		end
+	end
+	if #continentIds == 0 and #masses > 0 then
+		table.insert(continentIds, masses[1].id)
+	end
+	local candidatesBy: { [number]: { number } } = {}
+	for _, id in ids do
+		local lm = territories[id].landmassId
+		if lm > 0 and table.find(continentIds, lm) and startScore(id) >= 6 then
+			candidatesBy[lm] = candidatesBy[lm] or {}
+			table.insert(candidatesBy[lm], id)
+		end
+	end
+	local starts: { number } = {}
+	local civs = def.civilizations
+	for i = 1, civs do
+		-- Round-robin over continents (largest first) so starts span them.
+		local lm = continentIds[(i - 1) % #continentIds + 1]
+		local pool = candidatesBy[lm] or {}
+		if #pool == 0 then
+			-- Fall back to any continent candidate.
+			for _, l in continentIds do
+				if candidatesBy[l] and #candidatesBy[l] > 0 then
+					pool = candidatesBy[l]
+					break
+				end
+			end
+		end
+		local best, bestScore = nil, -math.huge
+		local distFromStarts = if #starts > 0 then landDistances(territories, starts) else {}
+		for _, id in pool do
+			if not table.find(starts, id) then
+				local hops = distFromStarts[id] or 99 -- other landmass = far
+				if hops >= MapConfig.START_MIN_SPACING then
+					local score = math.min(hops, 12) * 3 + startScore(id)
+					if score > bestScore then
+						best, bestScore = id, score
+					end
+				end
+			end
+		end
+		if best then
+			table.insert(starts, best)
+		end
 	end
 
 	local t1 = os.clock()
@@ -408,21 +963,74 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 		local tt = territories[id].terrainType
 		terrainCounts[tt] = (terrainCounts[tt] or 0) + 1
 	end
-
 	return {
-		seed = seed,
-		territoryCount = count,
-		width = width,
-		height = height,
+		territories = territories,
+		ids = ids,
 		seaLevel = seaLevel,
 		mountainLevel = mountainLevel,
-		territories = territories,
-		territoryIds = ids,
+		masses = masses,
+		continents = continents,
+		continentTarget = continentTarget,
+		rivers = rivers,
+		starts = starts,
 		stats = {
 			voronoiMs = (tVoronoi - t0) * 1000,
 			totalMs = (t1 - t0) * 1000,
 			lakesFilled = lakesFilled,
+			lakes = lakesAdded,
+			straits = straits,
 			terrainCounts = terrainCounts,
+		},
+	}
+end
+
+function MapGenerator.generate(options: GenerateOptions?): MapData
+	local opts = options or {}
+	local t0 = os.clock()
+	local baseSeed = math.floor(opts.seed or MapConfig.DEFAULT_SEED)
+	local sizeName = if opts.matchSize and MapConfig.MATCH_SIZES[opts.matchSize] then opts.matchSize else MapConfig.DEFAULT_MATCH_SIZE
+	local def = MapGenerator.matchSizeDef(sizeName)
+	local count = math.clamp(math.floor(opts.territoryCount or def.territories), MapConfig.MIN_TERRITORY_COUNT, MapConfig.MAX_TERRITORY_COUNT)
+	local autoW, autoH = MapConfig.mapSizeFor(count)
+	local width = opts.width or autoW
+	local height = opts.height or autoH
+
+	local result, attempt, seed
+	for a = 1, MapConfig.GENERATION_ATTEMPTS do
+		attempt = a
+		-- Attempt 1 uses the seed itself; retries derive new seeds from it.
+		seed = if a == 1 then baseSeed else (baseSeed * 7919 + a * 104729) % 2147483647
+		result = generateOnce(seed, def, count, width, height)
+		if result.continents >= def.continents[1] and #result.starts >= def.civilizations then
+			break
+		end
+	end
+
+	return {
+		seed = seed,
+		baseSeed = baseSeed,
+		attempt = attempt,
+		matchSize = sizeName,
+		civilizations = def.civilizations,
+		territoryCount = count,
+		width = width,
+		height = height,
+		seaLevel = result.seaLevel,
+		mountainLevel = result.mountainLevel,
+		territories = result.territories,
+		territoryIds = result.ids,
+		landmasses = result.masses,
+		continentCount = result.continents,
+		rivers = result.rivers,
+		startPositions = result.starts,
+		stats = {
+			voronoiMs = result.stats.voronoiMs,
+			totalMs = (os.clock() - t0) * 1000,
+			attempts = attempt,
+			lakesFilled = result.stats.lakesFilled,
+			lakes = result.stats.lakes,
+			straits = result.stats.straits,
+			terrainCounts = result.stats.terrainCounts,
 		},
 	}
 end
@@ -430,7 +1038,7 @@ end
 -- Deterministic fingerprint of the logical map (FNV-1a over a canonical
 -- string). Used to prove same seed => same map.
 function MapGenerator.fingerprint(map: MapData): string
-	local parts = { tostring(map.seed), tostring(map.territoryCount) }
+	local parts = { tostring(map.seed), tostring(map.territoryCount), map.matchSize }
 	for _, id in map.territoryIds do
 		local t = map.territories[id]
 		local coords = {}
@@ -440,16 +1048,18 @@ function MapGenerator.fingerprint(map: MapData): string
 		table.insert(
 			parts,
 			string.format(
-				"%d|%s|%.5f|%.5f|%s|%s",
+				"%d|%s|%.5f|%.5f|%s|%s|%s",
 				id,
 				t.terrainType,
 				t.elevation,
 				t.fertility,
 				table.concat(coords, ";"),
-				table.concat(t.neighbors, ",")
+				table.concat(t.neighbors, ","),
+				tostring(t.riverId)
 			)
 		)
 	end
+	table.insert(parts, table.concat(map.startPositions, ","))
 	local s = table.concat(parts, "\n")
 	local h = 2166136261
 	for i = 1, #s do

@@ -32,6 +32,7 @@ export type Region = {
 	passableByLand: boolean,
 	passableByNaval: boolean,
 	hasRoad: boolean, -- placeholder (roads arrive in a later phase)
+	hasRiver: boolean, -- territory has a river: entering costs RIVER_MOVE_COST extra
 }
 
 export type Graph = {
@@ -139,6 +140,7 @@ function MovementGraph.build(map: any): Graph
 					passableByLand = def.passableByLand,
 					passableByNaval = def.isWater,
 					hasRoad = false,
+					hasRiver = t.riverId ~= nil and not def.isWater,
 				}
 				regions[rid] = region
 				table.insert(regionIds, rid)

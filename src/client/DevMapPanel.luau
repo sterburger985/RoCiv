@@ -8,6 +8,8 @@
 -- never reach these tools.
 
 local Players = game:GetService("Players")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local MapConfig = require(ReplicatedStorage:WaitForChild("RoCiv"):WaitForChild("Shared"):WaitForChild("MapConfig"))
 
 local GUI_NAME = "DevMapPanel"
 
@@ -15,7 +17,7 @@ local DevMapPanel = {}
 DevMapPanel.__index = DevMapPanel
 
 export type Callbacks = {
-	regenerate: (seed: number, count: number) -> (),
+	regenerate: (seed: number, matchSize: string) -> (),
 	command: (cmd: { [string]: any }) -> { [string]: any },
 	selectedId: () -> number?,
 	toggleOverlay: () -> boolean,
@@ -33,7 +35,8 @@ export type DevMapPanel = typeof(setmetatable(
 		gui: ScreenGui,
 		body: Frame,
 		seedBox: TextBox,
-		countBox: TextBox,
+		sizeBtn: TextButton,
+		matchSize: string,
 		rangeBox: TextBox,
 		budgetBox: TextBox,
 		mapStatus: TextLabel,
@@ -222,8 +225,7 @@ function DevMapPanel.new(cb: Callbacks): DevMapPanel
 	local r1 = row(body, "MapRow", 2, 24)
 	caption(r1, "Seed", UDim.new(0, 0), UDim.new(0, 36))
 	local seedBox = box(r1, "SeedBox", "12345", UDim.new(0, 36), UDim.new(0.5, -40))
-	caption(r1, "Count", UDim.new(0.5, 4), UDim.new(0, 40))
-	local countBox = box(r1, "TerritoriesBox", "260", UDim.new(0.5, 44), UDim.new(0.5, -44))
+	local sizeBtn = button(r1, "MatchSizeButton", "Size: Quick", UDim.new(0.5, 4), UDim.new(0.5, -4))
 	local r2 = row(body, "MapButtons", 3, 24)
 	local regen = button(r2, "RegenerateButton", "Regenerate", UDim.new(0, 0), UDim.new(0.5, -3), true)
 	local random = button(r2, "RandomSeedButton", "Random seed", UDim.new(0.5, 3), UDim.new(0.5, -3))
@@ -271,7 +273,8 @@ function DevMapPanel.new(cb: Callbacks): DevMapPanel
 		gui = gui,
 		body = body,
 		seedBox = seedBox,
-		countBox = countBox,
+		sizeBtn = sizeBtn,
+		matchSize = MapConfig.DEFAULT_MATCH_SIZE,
 		rangeBox = rangeBox,
 		budgetBox = budgetBox,
 		mapStatus = mapStatus,
@@ -288,15 +291,26 @@ function DevMapPanel.new(cb: Callbacks): DevMapPanel
 
 	local function submit()
 		local seed = tonumber(seedBox.Text)
-		local count = tonumber(countBox.Text)
-		if not seed or not count then
-			say("Enter a numeric seed and territory count.")
+		if not seed then
+			say("Enter a numeric seed.")
 			return
 		end
-		mapStatus.Text = string.format("Regenerating seed %d with %d territories…", seed, count)
-		cb.regenerate(math.floor(seed), math.floor(count))
+		mapStatus.Text = string.format("Regenerating %s map, seed %d…", self.matchSize, seed)
+		cb.regenerate(math.floor(seed), self.matchSize)
 	end
 	regen.Activated:Connect(submit)
+	local function showSize()
+		local def = MapConfig.MATCH_SIZES[self.matchSize]
+		sizeBtn.Text = string.format("%s · %d civs", self.matchSize, def.civilizations)
+	end
+	showSize()
+	sizeBtn.Activated:Connect(function()
+		local order = MapConfig.MATCH_SIZE_ORDER
+		local i = table.find(order, self.matchSize) or 0
+		self.matchSize = order[i % #order + 1]
+		showSize()
+		say(string.format("Match size %s selected — press Regenerate.", self.matchSize))
+	end)
 	random.Activated:Connect(function()
 		seedBox.Text = tostring(math.random(1, 2 ^ 30))
 		submit()
@@ -427,11 +441,16 @@ end
 function DevMapPanel.update(self: DevMapPanel, devInfo: any, renderStats: any, renderOk: boolean, counts: { [string]: number }?)
 	if devInfo then
 		self.seedBox.Text = tostring(devInfo.seed)
-		self.countBox.Text = tostring(devInfo.territoryCount)
+		if devInfo.matchSize and MapConfig.MATCH_SIZES[devInfo.matchSize] then
+			self.matchSize = devInfo.matchSize
+			local def = MapConfig.MATCH_SIZES[devInfo.matchSize]
+			self.sizeBtn.Text = string.format("%s · %d civs", devInfo.matchSize, def.civilizations)
+		end
 	end
 	local lines = {}
 	if devInfo then
 		table.insert(lines, string.format("World %d x %d · %d territories · %s regions", devInfo.width, devInfo.height, devInfo.territoryCount, tostring(devInfo.regionCount)))
+		table.insert(lines, string.format("%s · %d continents · %d rivers · %d starts · attempt %d", tostring(devInfo.matchSize), devInfo.continents or 0, devInfo.rivers or 0, devInfo.starts or 0, devInfo.attempt or 1))
 		table.insert(
 			lines,
 			string.format(

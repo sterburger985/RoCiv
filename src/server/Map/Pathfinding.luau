@@ -6,7 +6,8 @@
 --   "Land"   may enter land regions only (embarking comes in a later phase)
 --   "Naval"  may enter water regions only
 -- Cost of a step = cost of ENTERING the destination region:
---   terrain moveCost, halved on regions with a road (placeholder data).
+--   terrain moveCost, halved on regions with a road, +RIVER_MOVE_COST on
+--   river territories without a road (placeholder road data).
 --
 -- Fog of war: callers pass a `knowledge(regionId)` function. Regions the
 -- player has not explored return nil and are treated as passable at
@@ -93,6 +94,9 @@ function Pathfinding.enterCost(graph: any, rid: number, opts: Options?): number?
 	local cost = info.moveCost
 	if info.hasRoad then
 		cost *= MapConfig.ROAD_COST_MULTIPLIER
+	elseif info.hasRiver then
+		-- Fording a river is slow; a road (bridge) removes the penalty.
+		cost += MapConfig.RIVER_MOVE_COST
 	end
 	return cost
 end

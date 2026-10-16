@@ -5,7 +5,7 @@
 --
 -- Each record: id, polygon, centroid, neighbors, state
 -- ("Visible" | "Explored" | "Unexplored"), and - only when explored -
--- terrainType, elevation, fertility, resources, ownerId.
+-- terrainType, elevation, fertility, resources, ownerId, riverPath.
 --
 -- Deltas carry the map version and a per-player sequence number; stale or
 -- out-of-order deltas are ignored, and deltas that arrive while a new map is
@@ -31,7 +31,7 @@ export type ClientMapState = typeof(setmetatable(
 	ClientMapState
 ))
 
-local STATIC_FIELDS = { "terrainType", "elevation", "fertility", "resources", "cityId" }
+local STATIC_FIELDS = { "terrainType", "elevation", "fertility", "resources", "cityId", "riverPath" }
 
 function ClientMapState.new(): ClientMapState
 	return setmetatable({

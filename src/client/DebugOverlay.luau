@@ -49,7 +49,7 @@ function DebugOverlay.build(self: DebugOverlay, state: any, renderer: any)
 		anchor.CanTouch = false
 		anchor.Transparency = 1
 		anchor.Size = Vector3.new(1, 1, 1)
-		anchor.Position = renderer:mapToWorld(r.centroid, y)
+		anchor.Position = renderer:mapToWorld(r.centroid, renderer:heightAt(r.centroid) + 2)
 		local bb = Instance.new("BillboardGui")
 		bb.Size = UDim2.fromOffset(40, 16)
 		bb.AlwaysOnTop = true
@@ -71,8 +71,8 @@ function DebugOverlay.build(self: DebugOverlay, state: any, renderer: any)
 			if nb > r.id then
 				local o = state:get(nb)
 				if o then
-					local a = renderer:mapToWorld(r.centroid, y)
-					local b = renderer:mapToWorld(o.centroid, y)
+					local a = renderer:mapToWorld(r.centroid, renderer:heightAt(r.centroid) + 2)
+					local b = renderer:mapToWorld(o.centroid, renderer:heightAt(o.centroid) + 2)
 					local link = Instance.new("Part")
 					link.Name = string.format("Link_%d_%d", r.id, nb)
 					link.Anchored = true

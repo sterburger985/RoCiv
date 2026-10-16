@@ -131,12 +131,24 @@ function CivilizationSystem.publicList(): { { [string]: any } }
 	return list
 end
 
--- Development test identities (not the final roster).
-function CivilizationSystem.createTestCivilizations()
+-- Development test identities (not the final roster): one per start
+-- position of the current match size.
+local TEST_COLORS = {
+	Color3.fromRGB(60, 120, 235),
+	Color3.fromRGB(220, 60, 60),
+	Color3.fromRGB(60, 190, 90),
+	Color3.fromRGB(235, 180, 40),
+	Color3.fromRGB(160, 80, 210),
+	Color3.fromRGB(40, 190, 200),
+	Color3.fromRGB(240, 120, 40),
+	Color3.fromRGB(230, 110, 180),
+}
+function CivilizationSystem.createTestCivilizations(count: number?)
 	CivilizationSystem.clear()
-	CivilizationSystem.create(1, "Civilization A (test)", Color3.fromRGB(60, 120, 235), true)
-	CivilizationSystem.create(2, "Civilization B (test)", Color3.fromRGB(220, 60, 60), true)
-	CivilizationSystem.create(3, "Civilization C (test)", Color3.fromRGB(60, 190, 90), true)
+	local n = math.clamp(count or 3, 1, #TEST_COLORS)
+	for i = 1, n do
+		CivilizationSystem.create(i, string.format("Civilization %s (test)", string.char(64 + i)), TEST_COLORS[i], true)
+	end
 end
 
 return CivilizationSystem
