@@ -1,0 +1,24 @@
+{
+  "name": "RoCiv",
+  "tree": {
+    "$className": "DataModel",
+    "ReplicatedStorage": {
+      "RoCiv": {
+        "$className": "Folder",
+        "Shared": { "$path": "src/shared" }
+      }
+    },
+    "ServerScriptService": {
+      "RoCiv": {
+        "$className": "Folder",
+        "MapService": { "$path": "src/server/MapService.server.luau" },
+        "Map": { "$path": "src/server/Map" }
+      }
+    },
+    "StarterPlayer": {
+      "StarterPlayerScripts": {
+        "RoCiv": { "$path": "src/client" }
+      }
+    }
+  }
+}
