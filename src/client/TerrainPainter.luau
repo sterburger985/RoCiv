@@ -182,7 +182,10 @@ local function applyLook(terrain: Terrain)
 	terrain.WaterReflectance = MapConfig.TERRAIN_WATER_REFLECTANCE
 	terrain.WaterWaveSize = MapConfig.TERRAIN_WATER_WAVE_SIZE
 	terrain.WaterWaveSpeed = MapConfig.TERRAIN_WATER_WAVE_SPEED
-	terrain.Decoration = false
+	-- Grass blades are invisible from strategy height; not scriptable everywhere.
+	pcall(function()
+		(terrain :: any).Decoration = false
+	end)
 end
 
 -- Column index helpers (map coordinates; world = map - size/2).
