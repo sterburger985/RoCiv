@@ -100,10 +100,10 @@ local MATERIAL_COLORS: { [Enum.Material]: Color3 } = {
 	-- Sepia (Civilization VI "explored" look)
 	[M.Limestone] = Color3.fromRGB(196, 170, 124),
 	[M.Concrete] = Color3.fromRGB(156, 130, 92),
-	[M.Basalt] = Color3.fromRGB(136, 112, 82),
-	[M.Ice] = Color3.fromRGB(226, 212, 178),
-	[M.Salt] = Color3.fromRGB(170, 162, 132),
-	[M.Asphalt] = Color3.fromRGB(96, 76, 52),
+	[M.Basalt] = Color3.fromRGB(158, 128, 90),
+	[M.Ice] = Color3.fromRGB(210, 192, 152),
+	[M.Salt] = Color3.fromRGB(146, 160, 150),
+	[M.Asphalt] = Color3.fromRGB(128, 102, 70),
 }
 
 -- Terrain heights (studs above sea level) ---------------------------------------
@@ -520,8 +520,8 @@ function TerrainPainter._paint(self: TerrainPainter, id: number, mode: Mode?)
 						end
 						-- Beaches: land never dips below the sea next to water.
 						local beach = false
-						if h < 2 then
-							h = math.max(h, 0.8)
+						if h < 1.3 then
+							h = math.max(h, 0.7)
 							beach = true
 						end
 						local top = Y0 + h
