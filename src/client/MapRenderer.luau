@@ -24,11 +24,21 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("RoCiv"):WaitForChild("Shared")
 local Geometry = require(Shared:WaitForChild("Geometry"))
 local MapConfig = require(Shared:WaitForChild("MapConfig"))
+local TerrainTypes = require(Shared:WaitForChild("TerrainTypes"))
 local TerritoryStyle = require(script.Parent:WaitForChild("TerritoryStyle"))
 
 local MAP_FOLDER_NAME = "StrategicMap"
 
-type Visual = { root: Instance, parts: { BasePart }, mesh: EditableMesh?, color: Color3, ownerOutline: Instance? }
+type Visual = {
+	root: Instance,
+	parts: { BasePart },
+	mesh: EditableMesh?,
+	color: Color3,
+	ownerOutline: Instance?,
+	height: number, -- current surface height offset
+	decor: Model?,
+	decorKey: string?,
+}
 
 local MapRenderer = {}
 MapRenderer.__index = MapRenderer
@@ -165,7 +175,7 @@ function MapRenderer._buildMeshVisual(self: MapRenderer, poly: { Vector2 }, colo
 	part.Material = MapConfig.TERRITORY_MATERIAL
 	part.Color = color
 	part.Position = self:mapToWorld(c, MapConfig.MAP_ORIGIN_Y - half)
-	return { root = part, parts = { part }, mesh = em, color = color, ownerOutline = nil }
+	return { root = part, parts = { part }, mesh = em, color = color, ownerOutline = nil, height = 0, decor = nil, decorKey = nil }
 end
 
 -- Classic two-wedge triangle.
@@ -213,7 +223,7 @@ function MapRenderer._buildWedgeVisual(self: MapRenderer, poly: { Vector2 }, col
 	for i = 2, #poly - 1 do
 		self:_drawTriangle(p1, self:mapToWorld(poly[i], y), self:mapToWorld(poly[i + 1], y), model, color, parts)
 	end
-	return { root = model, parts = parts, mesh = nil, color = color, ownerOutline = nil }
+	return { root = model, parts = parts, mesh = nil, color = color, ownerOutline = nil, height = 0, decor = nil, decorKey = nil }
 end
 
 -- Public -------------------------------------------------------------------
@@ -305,6 +315,118 @@ function MapRenderer.buildOutline(self: MapRenderer, polygon: { Vector2 }, width
 	return model
 end
 
+-- Tile design -----------------------------------------------------------------
+
+local SNOW = Color3.fromRGB(244, 246, 250)
+
+local function decoPart(shape: string, color: Color3, size: Vector3, cf: CFrame, tag: string): BasePart
+	local p: BasePart
+	if shape == "Wedge" then
+		p = Instance.new("WedgePart")
+	else
+		local part = Instance.new("Part")
+		if shape == "Ball" then
+			part.Shape = Enum.PartType.Ball
+		elseif shape == "Cylinder" then
+			part.Shape = Enum.PartType.Cylinder
+		end
+		p = part
+	end
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	p.Material = Enum.Material.SmoothPlastic
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Color = color
+	p.Size = size
+	p.CFrame = cf
+	p:SetAttribute("DecoTint", tag)
+	return p
+end
+
+-- Triangular ridge (two wedges back to back), base centred at `base`.
+local function ridge(model: Model, base: CFrame, length: number, height: number, width: number, color: Color3, tag: string)
+	local c = base * CFrame.new(0, height * 0.5, 0)
+	decoPart("Wedge", color, Vector3.new(length, height, width * 0.5), c * CFrame.new(0, 0, -width * 0.25), tag).Parent =
+		model
+	decoPart("Wedge", color, Vector3.new(length, height, width * 0.5), c * CFrame.new(0, 0, width * 0.25) * CFrame.Angles(0, math.pi, 0), tag).Parent =
+		model
+end
+
+-- Small deterministic terrain props. Only built for territories the player
+-- knows, so decorations can never reveal hidden terrain.
+function MapRenderer._buildDecorations(self: MapRenderer, record: any, height: number, color: Color3): Model?
+	local def = TerrainTypes.get(record.terrainType)
+	local kind = def and def.decoration
+	if not kind then
+		return nil
+	end
+	local poly = Geometry.insetConvex(self.polygons[record.id], 7)
+	local area = Geometry.signedArea(poly)
+	if area < 80 then
+		return nil
+	end
+	local caps = { Trees = 7, Peaks = 3, Snow = 4, Dunes = 3 }
+	local n = math.clamp(math.floor(area * MapConfig.DECORATION_DENSITY + 0.5), 1, caps[kind] or 3)
+	local rng = Random.new(record.id * 7919 + #kind)
+	local lo, hi = Geometry.bounds(poly)
+	local top = MapConfig.MAP_ORIGIN_Y + height
+	local model = Instance.new("Model")
+	model.Name = "Decor_" .. record.id
+	local placed, guard = 0, 0
+	while placed < n and guard < n * 40 do
+		guard += 1
+		local p = Vector2.new(rng:NextNumber(lo.X, hi.X), rng:NextNumber(lo.Y, hi.Y))
+		if Geometry.pointInConvex(poly, p, 0) then
+			placed += 1
+			local w = self:mapToWorld(p, top)
+			local yaw = rng:NextNumber(0, math.pi * 2)
+			if kind == "Trees" then
+				local d = rng:NextNumber(7, 10)
+				decoPart("Ball", color, Vector3.new(d, d, d), CFrame.new(w + Vector3.new(0, d * 0.3, 0)), "Base").Parent = model
+				local d2 = d * rng:NextNumber(0.55, 0.75)
+				local off = Vector3.new(math.cos(yaw), 0, math.sin(yaw)) * d * 0.55
+				decoPart("Ball", color, Vector3.new(d2, d2, d2), CFrame.new(w + off + Vector3.new(0, d2 * 0.3, 0)), "Base").Parent =
+					model
+			elseif kind == "Peaks" then
+				local L, H, W = rng:NextNumber(12, 18), rng:NextNumber(8, 12), rng:NextNumber(12, 17)
+				local base = CFrame.new(w) * CFrame.Angles(0, yaw, 0)
+				ridge(model, base, L, H, W, color, "Base")
+				local k = 0.36
+				ridge(model, base * CFrame.new(0, H * (1 - k), 0), L * k * 1.4, H * k, W * k, SNOW, "Snow")
+			elseif kind == "Snow" then
+				local d = rng:NextNumber(6, 10)
+				decoPart("Cylinder", color, Vector3.new(0.3, d, d), CFrame.new(w + Vector3.new(0, 0.15, 0)) * CFrame.Angles(0, 0, math.pi * 0.5), "Base").Parent =
+					model
+			elseif kind == "Dunes" then
+				ridge(model, CFrame.new(w) * CFrame.Angles(0, yaw, 0), rng:NextNumber(12, 18), rng:NextNumber(1.2, 2), rng:NextNumber(6, 9), color, "Base")
+			end
+		end
+	end
+	return model
+end
+
+local function moveVisual(v: Visual, dy: number)
+	if dy == 0 then
+		return
+	end
+	local root = v.root
+	if root:IsA("Model") then
+		root:PivotTo(root:GetPivot() + Vector3.new(0, dy, 0))
+	elseif root:IsA("BasePart") then
+		root.Position += Vector3.new(0, dy, 0)
+	end
+end
+
+-- World Y of a territory's top surface (outlines sit just above it).
+function MapRenderer.surfaceY(self: MapRenderer, id: number): number
+	local v = self.visuals[id]
+	return MapConfig.MAP_ORIGIN_Y + (if v then v.height else 0)
+end
+
 function MapRenderer._applyStyle(self: MapRenderer, record: any)
 	local v = self.visuals[record.id]
 	if not v then
@@ -317,18 +439,56 @@ function MapRenderer._applyStyle(self: MapRenderer, record: any)
 			p.Color = color
 		end
 	end
+	-- Height (known terrain only; unexplored stays flat).
+	local h = TerritoryStyle.surfaceHeight(record)
+	if v.height ~= h then
+		moveVisual(v, h - v.height)
+		v.height = h
+		if v.decor then
+			v.decor:Destroy()
+			v.decor = nil
+			v.decorKey = nil
+		end
+	end
+
+	-- Decorations.
+	local decoColor = if MapConfig.TILE_DECORATIONS then TerritoryStyle.decorationColor(record) else nil
+	local key = if decoColor then record.terrainType else nil
+	if key ~= v.decorKey then
+		if v.decor then
+			v.decor:Destroy()
+			v.decor = nil
+		end
+		v.decorKey = key
+		if key and decoColor and self.folder then
+			v.decor = self:_buildDecorations(record, h, decoColor)
+			if v.decor then
+				v.decor.Parent = self.folder:FindFirstChild("Decorations")
+			end
+		end
+	end
+	if v.decor and decoColor then
+		local snow = if record.state == "Explored" then SNOW:Lerp(MapConfig.FOG_EXPLORED_GREY, MapConfig.FOG_EXPLORED_BLEND) else SNOW
+		for _, p in v.decor:GetChildren() do
+			if p:IsA("BasePart") then
+				p.Color = if p:GetAttribute("DecoTint") == "Snow" then snow else decoColor
+			end
+		end
+	end
+
 	local borderColor = TerritoryStyle.ownerBorderColor(record)
 	if v.ownerOutline then
 		v.ownerOutline:Destroy()
 		v.ownerOutline = nil
 	end
 	if borderColor and self.folder then
-		local outline = self:buildOutline(self.polygons[record.id], MapConfig.OWNER_OUTLINE_WIDTH, borderColor, 0.06)
+		local outline = self:buildOutline(self.polygons[record.id], MapConfig.OWNER_OUTLINE_WIDTH, borderColor, h + 0.06)
 		outline.Name = "OwnerBorder_" .. record.id
 		outline.Parent = self.folder:FindFirstChild("OwnerBorders")
 		v.ownerOutline = outline
 	end
 	-- Attributes mirror the client's knowledge for debugging/tests only.
+	v.root:SetAttribute("SurfaceHeight", v.height)
 	v.root:SetAttribute("Visibility", record.state)
 	v.root:SetAttribute("KnownTerrain", record.terrainType)
 	v.root:SetAttribute("KnownOwner", record.ownerId)
@@ -357,6 +517,9 @@ function MapRenderer.render(self: MapRenderer, state: any): { [string]: any }
 	local ownerFolder = Instance.new("Folder")
 	ownerFolder.Name = "OwnerBorders"
 	ownerFolder.Parent = folder
+	local decoFolder = Instance.new("Folder")
+	decoFolder.Name = "Decorations"
+	decoFolder.Parent = folder
 	folder.Parent = workspace
 
 	local failures = 0
@@ -441,6 +604,13 @@ function MapRenderer.setEmphasis(self: MapRenderer, id: number, amount: number?)
 	end
 end
 
+-- Re-styles every territory (e.g. civilization colours changed).
+function MapRenderer.refreshAll(self: MapRenderer, state: any)
+	for _, r in state.list do
+		self:_applyStyle(r)
+	end
+end
+
 function MapRenderer.getVisualRoot(self: MapRenderer, id: number): Instance?
 	local v = self.visuals[id]
 	return if v then v.root else nil
@@ -470,6 +640,12 @@ function MapRenderer.validate(self: MapRenderer, state: any): (boolean, { string
 			table.insert(problems, "Visual has no parts for territory " .. t.id)
 		elseif v.parts[1].Color ~= TerritoryStyle.fillColor(t, self.emphasis[t.id]) then
 			table.insert(problems, "Visual colour does not match state for territory " .. t.id)
+		end
+		if not TerritoryStyle.isKnown(t) and (v.decor ~= nil or v.height ~= 0) then
+			table.insert(problems, "Fog leak: unexplored territory has terrain height/decorations " .. t.id)
+		end
+		if v.height ~= TerritoryStyle.surfaceHeight(t) then
+			table.insert(problems, "Surface height mismatch for territory " .. t.id)
 		end
 		local wantBorder = TerritoryStyle.ownerBorderColor(t) ~= nil
 		if wantBorder ~= (v.ownerOutline ~= nil) then

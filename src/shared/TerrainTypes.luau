@@ -10,8 +10,11 @@ export type TerrainDef = {
 	color: Color3,
 	isWater: boolean,
 	baseFertility: number, -- 0..1
-	moveCost: number, -- placeholder for Phase 3 movement
+	moveCost: number, -- cost to enter a region of this terrain (Phase 3)
 	passableByLand: boolean,
+	surfaceHeight: number, -- tile height offset in studs (presentation)
+	decoration: string?, -- "Trees" | "Peaks" | "Snow" | "Dunes" | nil (presentation)
+	decorationColor: Color3?,
 }
 
 local TerrainTypes = {}
@@ -25,6 +28,7 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.15,
 		moveCost = 1,
 		passableByLand = false,
+		surfaceHeight = -0.9,
 	},
 	{
 		-- Coast = shallow water next to land (Civilization convention).
@@ -35,6 +39,7 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.35,
 		moveCost = 1,
 		passableByLand = false,
+		surfaceHeight = -0.6,
 	},
 	{
 		id = "Grassland",
@@ -44,6 +49,7 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.75,
 		moveCost = 1,
 		passableByLand = true,
+		surfaceHeight = 0,
 	},
 	{
 		id = "Plains",
@@ -53,6 +59,7 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.6,
 		moveCost = 1,
 		passableByLand = true,
+		surfaceHeight = 0,
 	},
 	{
 		id = "Forest",
@@ -62,6 +69,9 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.45,
 		moveCost = 2,
 		passableByLand = true,
+		surfaceHeight = 0.15,
+		decoration = "Trees",
+		decorationColor = Color3.fromRGB(28, 82, 44),
 	},
 	{
 		id = "Desert",
@@ -71,6 +81,9 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.12,
 		moveCost = 1,
 		passableByLand = true,
+		surfaceHeight = 0.05,
+		decoration = "Dunes",
+		decorationColor = Color3.fromRGB(196, 160, 92),
 	},
 	{
 		id = "Tundra",
@@ -80,6 +93,9 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.2,
 		moveCost = 1,
 		passableByLand = true,
+		surfaceHeight = 0.1,
+		decoration = "Snow",
+		decorationColor = Color3.fromRGB(236, 240, 244),
 	},
 	{
 		id = "Mountains",
@@ -89,6 +105,9 @@ local defs: { TerrainDef } = {
 		baseFertility = 0.05,
 		moveCost = 3,
 		passableByLand = true,
+		surfaceHeight = 1.4,
+		decoration = "Peaks",
+		decorationColor = Color3.fromRGB(96, 84, 76),
 	},
 }
 

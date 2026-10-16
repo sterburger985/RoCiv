@@ -134,6 +134,37 @@ MapConfig.LIGHTING_EXPOSURE = 0
 MapConfig.LIGHTING_ENV_SPECULAR = 0
 MapConfig.LIGHTING_SATURATION = 0.12 -- ColorCorrection saturation boost
 
+-- Tile design (presentation only) --------------------------------------------
+
+-- Each known territory's colour is shaded slightly (deterministic per id) so
+-- neighbouring territories of the same terrain stay distinguishable.
+MapConfig.TILE_SHADE_VARIATION = 0.05
+-- Small terrain decorations (trees, peaks, snow, dunes) on known territories.
+MapConfig.TILE_DECORATIONS = true
+MapConfig.DECORATION_DENSITY = 1 / 2600 -- decorations per stud^2 of territory
+
+-- Selected territory: its direct neighbours get a temporary outline.
+MapConfig.NEIGHBOR_OUTLINE_COLOR = Color3.fromRGB(120, 220, 255)
+MapConfig.NEIGHBOR_OUTLINE_WIDTH = 1.4
+
+-- Roblox chat window: small, top-right (map stays the focus).
+MapConfig.CHAT_WIDTH_SCALE = 0.65
+MapConfig.CHAT_HEIGHT_SCALE = 0.5
+MapConfig.CHAT_TEXT_SIZE = 13
+
+-- Movement regions (Phase 3) ---------------------------------------------------
+
+-- Each territory is split into ~area / REGION_TARGET_AREA movement regions.
+MapConfig.REGION_TARGET_AREA = 3600
+MapConfig.REGION_MAX_PER_TERRITORY = 8
+MapConfig.REGION_LLOYD_ITERATIONS = 2
+MapConfig.REGION_MIN_SHARED_EDGE = 2 -- studs; shorter contacts are not passages
+-- Pathfinding
+MapConfig.UNKNOWN_REGION_COST = 1 -- unexplored regions: assumed passable at this cost
+MapConfig.ROAD_COST_MULTIPLIER = 0.5 -- placeholder until roads exist
+MapConfig.ROUTE_REQUESTS_PER_SECOND = 10 -- per player, server-enforced
+MapConfig.MAX_RANGE_BUDGET = 30
+
 -- Fog of war -----------------------------------------------------------------
 
 MapConfig.FOG_OF_WAR_ENABLED = true

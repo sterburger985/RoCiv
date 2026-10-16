@@ -1,13 +1,16 @@
 --!strict
 -- ClientMain (LocalScript, StarterPlayerScripts.RoCiv)
--- Wires the client map systems together:
+-- Wires the client systems together:
 --   server payload -> ClientMapState -> MapRenderer (+ fog styling)
 --   TerritoryDelta  -> ClientMapState -> MapRenderer.refresh / panel refresh
+--   civilizations   -> TerritoryStyle (owner names/colours) -> restyle
 --   input           -> CameraController / SelectionController -> info panel
+--   movement graph  -> MovementClient (region overlay, route/range previews)
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
+local TextChatService = game:GetService("TextChatService")
 
 local Shared = ReplicatedStorage:WaitForChild("RoCiv"):WaitForChild("Shared")
 local MapQuery = require(Shared:WaitForChild("MapQuery"))
@@ -20,8 +23,10 @@ local MapRenderer = require(here:WaitForChild("MapRenderer"))
 local CameraController = require(here:WaitForChild("CameraController"))
 local SelectionController = require(here:WaitForChild("SelectionController"))
 local TerritoryInfoPanel = require(here:WaitForChild("TerritoryInfoPanel"))
+local TerritoryStyle = require(here:WaitForChild("TerritoryStyle"))
 local DevMapPanel = require(here:WaitForChild("DevMapPanel"))
 local DebugOverlay = require(here:WaitForChild("DebugOverlay"))
+local MovementClient = require(here:WaitForChild("MovementClient"))
 
 local player = Players.LocalPlayer
 
@@ -53,17 +58,40 @@ local function applyMapLighting()
 end
 applyMapLighting()
 
+-- Small chat window pinned to the top-right corner so the map stays clear.
+local function applyChatLayout()
+	local window = TextChatService:FindFirstChildOfClass("ChatWindowConfiguration")
+	if window then
+		window.HorizontalAlignment = Enum.HorizontalAlignment.Right
+		window.VerticalAlignment = Enum.VerticalAlignment.Top
+		window.WidthScale = MapConfig.CHAT_WIDTH_SCALE
+		window.HeightScale = MapConfig.CHAT_HEIGHT_SCALE
+		window.TextSize = MapConfig.CHAT_TEXT_SIZE
+		window.BackgroundTransparency = 0.35
+	end
+	local bar = TextChatService:FindFirstChildOfClass("ChatInputBarConfiguration")
+	if bar then
+		bar.TextSize = MapConfig.CHAT_TEXT_SIZE
+	end
+end
+pcall(applyChatLayout)
+
 local state = ClientMapState.new()
 local renderer = MapRenderer.new()
 local camera = CameraController.new()
 local selection = SelectionController.new(renderer)
 local overlay = DebugOverlay.new()
+local movement = MovementClient.new(renderer, state, remotes)
 local panel = TerritoryInfoPanel.new(function()
 	selection:clear()
 end)
 selection:onChanged(function(record)
-	panel:show(record)
+	panel:show(record, state.yourCivilizationId)
 end)
+-- While the route tool is on, left clicks plan routes instead of selecting.
+selection.clickInterceptor = function(screenPos)
+	return movement:handleClick(SelectionController.planePoint(screenPos))
+end
 
 local devPanel = nil
 local devRemote = remotes:FindFirstChild("DevRegenerate") :: RemoteEvent?
@@ -94,21 +122,59 @@ if RunService:IsStudio() and devRemote and devCommand then
 		toggleOverlay = function()
 			return overlay:toggle(state, renderer)
 		end,
+		movement = {
+			setOverlay = function(on)
+				movement:setOverlay(on)
+			end,
+			setRouteTool = function(on)
+				movement:setRouteTool(on)
+			end,
+			setDomain = function(domain)
+				movement:setDomain(domain)
+			end,
+			setRange = function(on, budget)
+				movement:setRange(on, budget)
+			end,
+		},
 	})
+	movement:onStatus(function(text)
+		devPanel:setMovementStatus(text)
+	end)
+end
+
+local function revalidate(label: string)
+	local ok, problems = renderer:validate(state)
+	lastRenderOk = ok
+	for _, p in problems do
+		warn("[ClientMain] Render problem " .. label .. ": " .. p)
+	end
 end
 
 -- Visibility / ownership deltas: restyle only what changed, in one frame.
 state:onChanged(function(ids)
 	renderer:refresh(state, ids)
 	selection:refresh(ids)
-	-- Re-check that every visual still matches the data after the change.
-	local ok, problems = renderer:validate(state)
-	lastRenderOk = ok
-	for _, p in problems do
-		warn("[ClientMain] Render problem after update: " .. p)
-	end
+	movement:onVisibilityChanged()
+	revalidate("after update")
 	updateDevPanel()
+	if devPanel then
+		devPanel:refreshCivStatus()
+	end
 	player:SetAttribute("MapStateSeq", state.seq)
+end)
+
+-- Civilization list changes (names/colours/controllers): restyle everything.
+state:onCivilizationsChanged(function()
+	TerritoryStyle.setCivilizations(state.civilizations)
+	if renderer.state then
+		renderer:refreshAll(state)
+		selection:refresh(nil)
+		revalidate("after civilization update")
+	end
+	if devPanel then
+		devPanel:setCivilizations(state.civilizations)
+	end
+	player:SetAttribute("YourCivilizationId", state.yourCivilizationId or 0)
 end)
 
 local loading = false
@@ -127,36 +193,39 @@ local function loadMap()
 			selection:clear()
 			overlay:clear()
 			state:load(payload)
+			TerritoryStyle.setCivilizations(state.civilizations)
 			local stats = renderer:render(state)
 			local query = MapQuery.new(state.list, state.width, state.height)
 			selection:setMap(state, query)
 			camera:setBounds(state.width, state.height)
 			overlay:build(state, renderer)
-			local ok, problems = renderer:validate(state)
-			lastRenderOk = ok
+			movement:load()
+			revalidate("after load")
 			lastDevInfo = payload.devInfo
 			local c = state:counts()
 			print(
 				string.format(
-					"[ClientMain] Rendered map v%d: %d territories (%dx%d) via %s in %.1f ms, %d instances. Fog: %d visible / %d explored / %d unexplored. Render check: %s",
+					"[ClientMain] Rendered map v%d: %d territories (%dx%d), %d movement regions, via %s in %.1f ms, %d instances. Fog: %d visible / %d explored / %d unexplored. Render check: %s",
 					payload.version,
 					stats.territoryCount,
 					state.width,
 					state.height,
+					#movement.list,
 					stats.backend,
 					stats.renderMs,
 					stats.instanceCount,
 					c.Visible,
 					c.Explored,
 					c.Unexplored,
-					if ok then "PASS" else "FAIL"
+					if lastRenderOk then "PASS" else "FAIL"
 				)
 			)
-			for _, p in problems do
-				warn("[ClientMain] Render problem: " .. p)
-			end
 			player:SetAttribute("MapVersionLoaded", state.version)
 			player:SetAttribute("MapStateSeq", state.seq)
+			player:SetAttribute("YourCivilizationId", state.yourCivilizationId or 0)
+			if devPanel then
+				devPanel:setCivilizations(state.civilizations)
+			end
 			updateDevPanel()
 		end
 	until not pendingReload
@@ -165,6 +234,10 @@ end
 
 (remotes:WaitForChild("TerritoryDelta") :: RemoteEvent).OnClientEvent:Connect(function(delta)
 	state:applyDelta(delta)
+end);
+
+(remotes:WaitForChild("CivilizationsUpdated") :: RemoteEvent).OnClientEvent:Connect(function(list, yourId)
+	state:setCivilizations(list, yourId)
 end);
 
 (remotes:WaitForChild("MapUpdated") :: RemoteEvent).OnClientEvent:Connect(function()

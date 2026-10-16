@@ -37,8 +37,9 @@ export type Territory = {
 	moisture: number, -- 0..1
 	latitude: number, -- 0 (equator) .. 1 (pole)
 	resources: { any }, -- placeholder (resource phase)
-	ownerId: number?, -- nil = unowned
+	ownerId: number?, -- civilizationId, nil = unowned (change only via TerritorySystem)
 	cityId: number?, -- nil = no city
+	developmentData: { [string]: any }, -- placeholder for future improvements
 	movementMetadata: {
 		moveCost: number,
 		passableByLand: boolean,
@@ -224,6 +225,7 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 			resources = {},
 			ownerId = nil,
 			cityId = nil,
+			developmentData = {},
 			movementMetadata = { moveCost = 1, passableByLand = false, isWater = true },
 		}
 	end

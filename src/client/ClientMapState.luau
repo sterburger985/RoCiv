@@ -24,11 +24,14 @@ export type ClientMapState = typeof(setmetatable(
 		list: { any },
 		pending: { any },
 		listeners: { (ids: { number }) -> () },
+		civilizations: { any },
+		yourCivilizationId: number?,
+		civListeners: { () -> () },
 	},
 	ClientMapState
 ))
 
-local STATIC_FIELDS = { "terrainType", "elevation", "fertility", "resources" }
+local STATIC_FIELDS = { "terrainType", "elevation", "fertility", "resources", "cityId" }
 
 function ClientMapState.new(): ClientMapState
 	return setmetatable({
@@ -40,11 +43,27 @@ function ClientMapState.new(): ClientMapState
 		list = {},
 		pending = {},
 		listeners = {},
+		civilizations = {},
+		yourCivilizationId = nil,
+		civListeners = {},
 	}, ClientMapState)
 end
 
 function ClientMapState.onChanged(self: ClientMapState, fn: (ids: { number }) -> ())
 	table.insert(self.listeners, fn)
+end
+
+function ClientMapState.onCivilizationsChanged(self: ClientMapState, fn: () -> ())
+	table.insert(self.civListeners, fn)
+end
+
+-- Public civilization list (id, name, colour) + which one this player controls.
+function ClientMapState.setCivilizations(self: ClientMapState, list: { any }?, yourId: number?)
+	self.civilizations = list or {}
+	self.yourCivilizationId = yourId
+	for _, fn in self.civListeners do
+		fn()
+	end
 end
 
 -- Replaces everything with a fresh payload (new map or reconnect).
@@ -58,6 +77,8 @@ function ClientMapState.load(self: ClientMapState, payload: any)
 	for _, r in payload.territories do
 		self.records[r.id] = r
 	end
+	self.civilizations = payload.civilizations or {}
+	self.yourCivilizationId = payload.yourCivilizationId
 	-- Apply buffered deltas that belong to this map and are newer.
 	local buffered = self.pending
 	self.pending = {}

@@ -3,12 +3,19 @@
 -- Left-click a territory to select it. Deselect by left-clicking outside the
 -- map, right-clicking without dragging (right-drag pans the camera), or the
 -- panel's close button. Escape is not used: Roblox reserves it for its menu.
--- Hovering shows a thin outline; the selection gets a thick gold outline.
+--
+-- Feedback (all temporary, never stored as data):
+--   hover      thin white outline + slight lightening
+--   selected   thick gold outline + stronger lightening
+--   neighbours thin cyan outlines on every direct neighbour of the selection
 --
 -- The cursor is projected onto the map plane, converted to map coordinates
--- and resolved with MapQuery against the territory *data*. Rendered parts
--- are never used to decide which territory was picked. Unexplored
--- territories can be selected but reveal nothing (the client has no data).
+-- and resolved with MapQuery against the territory *data* (stable ids).
+-- Rendered parts and decorative geometry are never used to decide what was
+-- picked. Unexplored territories can be selected but reveal nothing.
+--
+-- `clickInterceptor` lets other tools (e.g. the Phase 3 route tool) take
+-- left clicks instead of selection.
 
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
@@ -19,6 +26,11 @@ local Shared = ReplicatedStorage:WaitForChild("RoCiv"):WaitForChild("Shared")
 local MapConfig = require(Shared:WaitForChild("MapConfig"))
 
 local FX_FOLDER_NAME = "RoCivClientFX"
+
+-- Fill lightening: selection is stronger than hover; readable at any zoom
+-- (the outlines alone are only ~1 pixel wide when fully zoomed out).
+local SELECT_EMPHASIS = 0.3
+local HOVER_EMPHASIS = 0.12
 
 local SelectionController = {}
 SelectionController.__index = SelectionController
@@ -33,10 +45,12 @@ export type SelectionController = typeof(setmetatable(
 		fx: Folder,
 		selectionOutline: Instance?,
 		hoverOutline: Instance?,
+		neighborOutlines: Folder?,
 		listeners: { (record: any?) -> () },
 		connections: { RBXScriptConnection },
 		pressPos: Vector2?,
 		rightPressPos: Vector2?,
+		clickInterceptor: ((screenPos: Vector2) -> boolean)?,
 	},
 	SelectionController
 ))
@@ -60,10 +74,12 @@ function SelectionController.new(renderer: any): SelectionController
 		fx = fx,
 		selectionOutline = nil,
 		hoverOutline = nil,
+		neighborOutlines = nil,
 		listeners = {},
 		connections = {},
 		pressPos = nil,
 		rightPressPos = nil,
+		clickInterceptor = nil,
 	}, SelectionController)
 	self:_bind()
 	return self
@@ -89,32 +105,6 @@ function SelectionController._notify(self: SelectionController)
 	end
 end
 
--- Re-sends the current record (e.g. after its visibility or owner changed).
-function SelectionController.refresh(self: SelectionController, changedIds: { number }?)
-	if not self.selectedId then
-		return
-	end
-	if changedIds and not table.find(changedIds, self.selectedId) then
-		return
-	end
-	self:_notify()
-end
-
-function SelectionController._outline(self: SelectionController, id: number, width: number, color: Color3, lift: number): Instance?
-	local poly = self.renderer:getPolygon(id)
-	if not poly then
-		return nil
-	end
-	local outline = self.renderer:buildOutline(poly, width, color, lift)
-	outline.Parent = self.fx
-	return outline
-end
-
--- Fill lightening: selection is stronger than hover; readable at any zoom
--- (the outlines alone are only ~1 pixel wide when fully zoomed out).
-local SELECT_EMPHASIS = 0.3
-local HOVER_EMPHASIS = 0.12
-
 function SelectionController._emphasis(self: SelectionController, id: number?)
 	if not id then
 		return
@@ -128,6 +118,73 @@ function SelectionController._emphasis(self: SelectionController, id: number?)
 	self.renderer:setEmphasis(id, amount)
 end
 
+function SelectionController._outline(self: SelectionController, id: number, width: number, color: Color3, lift: number, parent: Instance?): Instance?
+	local poly = self.renderer:getPolygon(id)
+	if not poly then
+		return nil
+	end
+	local base = self.renderer:surfaceY(id) - MapConfig.MAP_ORIGIN_Y
+	local outline = self.renderer:buildOutline(poly, width, color, base + lift)
+	outline.Parent = parent or self.fx
+	return outline
+end
+
+-- (Re)draws selection + neighbour outlines for the current selection.
+function SelectionController._drawSelection(self: SelectionController)
+	if self.selectionOutline then
+		self.selectionOutline:Destroy()
+		self.selectionOutline = nil
+	end
+	if self.neighborOutlines then
+		self.neighborOutlines:Destroy()
+		self.neighborOutlines = nil
+	end
+	local id = self.selectedId
+	if not id or not self.state then
+		return
+	end
+	local record = self.state:get(id)
+	if not record then
+		return
+	end
+	local folder = Instance.new("Folder")
+	folder.Name = "NeighborOutlines"
+	for _, nb in record.neighbors do
+		local o = self:_outline(nb, MapConfig.NEIGHBOR_OUTLINE_WIDTH, MapConfig.NEIGHBOR_OUTLINE_COLOR, 0.12, folder)
+		if o then
+			o.Name = "Neighbor_" .. nb
+		end
+	end
+	folder.Parent = self.fx
+	self.neighborOutlines = folder
+	self.selectionOutline = self:_outline(id, MapConfig.SELECTION_OUTLINE_WIDTH, MapConfig.SELECTION_OUTLINE_COLOR, 0.16)
+	if self.selectionOutline then
+		self.selectionOutline.Name = "SelectionOutline"
+	end
+end
+
+-- Called after visibility/ownership changes: keeps outlines on the right
+-- surface height and the panel in sync with the data.
+function SelectionController.refresh(self: SelectionController, changedIds: { number }?)
+	if not self.selectedId then
+		return
+	end
+	local affected = changedIds == nil or table.find(changedIds, self.selectedId) ~= nil
+	if changedIds and not affected and self.state then
+		local record = self.state:get(self.selectedId)
+		for _, nb in (if record then record.neighbors else {}) do
+			if table.find(changedIds, nb) then
+				affected = true
+				break
+			end
+		end
+	end
+	if affected then
+		self:_drawSelection()
+		self:_notify()
+	end
+end
+
 function SelectionController.select(self: SelectionController, id: number?)
 	if id ~= nil and (not self.state or self.state:get(id) == nil) then
 		id = nil
@@ -139,17 +196,7 @@ function SelectionController.select(self: SelectionController, id: number?)
 	self.selectedId = id
 	self:_emphasis(previous)
 	self:_emphasis(id)
-	if self.selectionOutline then
-		self.selectionOutline:Destroy()
-		self.selectionOutline = nil
-	end
-	if id then
-		self.selectionOutline =
-			self:_outline(id, MapConfig.SELECTION_OUTLINE_WIDTH, MapConfig.SELECTION_OUTLINE_COLOR, 0.14)
-		if self.selectionOutline then
-			self.selectionOutline.Name = "SelectionOutline"
-		end
-	end
+	self:_drawSelection()
 	self:_notify()
 end
 
@@ -157,10 +204,7 @@ function SelectionController.clear(self: SelectionController)
 	local previous = self.selectedId
 	self.selectedId = nil
 	self:_emphasis(previous)
-	if self.selectionOutline then
-		self.selectionOutline:Destroy()
-		self.selectionOutline = nil
-	end
+	self:_drawSelection()
 	self:_notify()
 end
 
@@ -185,10 +229,10 @@ function SelectionController._setHover(self: SelectionController, id: number?)
 	Players.LocalPlayer:SetAttribute("HoverTerritoryId", id or 0)
 end
 
--- Screen position -> territory id (or nil).
-function SelectionController.pick(self: SelectionController, screenPos: Vector2): number?
+-- Screen position -> point on the map plane (world), or nil.
+function SelectionController.planePoint(screenPos: Vector2): Vector3?
 	local cam = workspace.CurrentCamera
-	if not cam or not self.query then
+	if not cam then
 		return nil
 	end
 	local ray = cam:ViewportPointToRay(screenPos.X, screenPos.Y)
@@ -199,7 +243,18 @@ function SelectionController.pick(self: SelectionController, screenPos: Vector2)
 	if t < 0 then
 		return nil
 	end
-	local world = ray.Origin + ray.Direction * t
+	return ray.Origin + ray.Direction * t
+end
+
+-- Screen position -> territory id (or nil).
+function SelectionController.pick(self: SelectionController, screenPos: Vector2): number?
+	if not self.query then
+		return nil
+	end
+	local world = SelectionController.planePoint(screenPos)
+	if not world then
+		return nil
+	end
 	return self.query:territoryAt(self.renderer:worldToMap(world))
 end
 
@@ -255,6 +310,9 @@ function SelectionController._bind(self: SelectionController)
 			local pos = UserInputService:GetMouseLocation()
 			-- Ignore drags; only treat short clicks as selection.
 			if (pos - press).Magnitude > 6 then
+				return
+			end
+			if self.clickInterceptor and self.clickInterceptor(pos) then
 				return
 			end
 			self:select(self:pick(pos))
