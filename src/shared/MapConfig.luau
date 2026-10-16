@@ -145,7 +145,7 @@ MapConfig.DESERT_MAX_LATITUDE = 0.55
 
 MapConfig.DESERT_MOISTURE = 0.30 -- below => desert
 MapConfig.GRASSLAND_MOISTURE = 0.50 -- above => grassland
-MapConfig.FOREST_MOISTURE = 0.66 -- above => forest
+MapConfig.FOREST_MOISTURE = 0.70 -- above => forest
 
 -- Rendering ----------------------------------------------------------------
 

@@ -643,38 +643,47 @@ local function generateOnce(seed: number, def: any, count: number, width: number
 			end
 		end
 	end
-	-- Extra lakes in damp lowland basins (local minima away from the coast).
+	-- Extra lakes in damp, low inland territories (no sea neighbours),
+	-- kept a few territories apart so each reads as its own lake.
 	local lakeCandidates = {}
+	local lakeScore: { [number]: number } = {}
 	for _, id in ids do
 		local t = territories[id]
-		if not t.isWater and t.moisture > 0.55 and t.latitude < 0.7 then
-			local lowest, inland = true, true
+		if not t.isWater and t.latitude < 0.75 then
+			local inland = true
 			for _, nb in t.neighbors do
-				local o = territories[nb]
-				if o.isWater then
+				if territories[nb].isWater then
 					inland = false
-				elseif o.elevation < t.elevation then
-					lowest = false
+					break
 				end
 			end
-			if lowest and inland then
+			if inland then
 				table.insert(lakeCandidates, id)
+				lakeScore[id] = t.moisture - (t.elevation - seaLevel) * 2 + rng:NextNumber(0, 0.15)
 			end
 		end
 	end
+	table.sort(lakeCandidates, function(x, y)
+		if lakeScore[x] == lakeScore[y] then
+			return x < y
+		end
+		return lakeScore[x] > lakeScore[y]
+	end)
 	local lakesAdded = 0
 	for _, id in lakeCandidates do
 		if lakesAdded >= def.lakes then
 			break
 		end
-		-- Don't place lakes next to other lakes (keeps them distinct).
-		local nearLake = false
+		-- No other water within 2 hops (keeps lakes distinct and inland).
+		local clear = true
 		for _, nb in territories[id].neighbors do
-			if isLake[nb] then
-				nearLake = true
+			for _, nb2 in territories[nb].neighbors do
+				if territories[nb2].isWater then
+					clear = false
+				end
 			end
 		end
-		if not nearLake then
+		if clear then
 			territories[id].isWater = true
 			isLake[id] = true
 			lakesAdded += 1
@@ -985,6 +994,7 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 			attempts = attempt,
 			lakesFilled = result.stats.lakesFilled,
 			lakes = result.stats.lakes,
+			straits = result.stats.straits,
 			terrainCounts = result.stats.terrainCounts,
 		},
 	}
