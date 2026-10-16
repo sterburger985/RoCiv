@@ -406,6 +406,16 @@ function MapRenderer._updateOwnerBorder(self: MapRenderer, record: any)
 	if borderColor and self.folder then
 		local outline = self:buildOutline(self.polygons[record.id], MapConfig.OWNER_OUTLINE_WIDTH, borderColor, MapConfig.OWNER_OUTLINE_LIFT)
 		outline.Name = "OwnerBorder_" .. record.id
+		-- Translucent band just inside the line reads as a territory tint.
+		local inner = Geometry.insetConvex(self.polygons[record.id], MapConfig.OWNER_OUTLINE_WIDTH)
+		if #inner >= 3 then
+			local band = self:buildOutline(inner, MapConfig.OWNER_BAND_WIDTH, borderColor, MapConfig.OWNER_OUTLINE_LIFT - 0.1)
+			for _, p in band:GetChildren() do
+				(p :: BasePart).Transparency = MapConfig.OWNER_BAND_TRANSPARENCY
+				p.Parent = outline
+			end
+			band:Destroy()
+		end
 		outline.Parent = self.folder:FindFirstChild("OwnerBorders")
 		v.ownerOutline = outline
 	end

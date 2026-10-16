@@ -199,10 +199,13 @@ MapConfig.RENDER_BATCH_SIZE = 25
 
 -- Selection / hover outlines (drawn from the territory polygon)
 MapConfig.SELECTION_OUTLINE_COLOR = Color3.fromRGB(255, 214, 80)
-MapConfig.SELECTION_OUTLINE_WIDTH = 3
+MapConfig.SELECTION_OUTLINE_WIDTH = 6
 MapConfig.HOVER_OUTLINE_COLOR = Color3.fromRGB(245, 245, 235)
-MapConfig.HOVER_OUTLINE_WIDTH = 1.2
-MapConfig.OWNER_OUTLINE_WIDTH = 4
+MapConfig.HOVER_OUTLINE_WIDTH = 3
+MapConfig.OWNER_OUTLINE_WIDTH = 8
+-- Soft inner band in the owner's colour (Humankind-style territory tint).
+MapConfig.OWNER_BAND_WIDTH = 22
+MapConfig.OWNER_BAND_TRANSPARENCY = 0.55
 -- How strongly an owner's colour tints a territory's fill (0..1).
 MapConfig.OWNER_FILL_TINT = 0.28
 
@@ -246,7 +249,7 @@ MapConfig.TILE_SHADE_VARIATION = 0.04 -- parchment slabs vary slightly, like age
 
 -- Selected territory: its direct neighbours get a temporary outline.
 MapConfig.NEIGHBOR_OUTLINE_COLOR = Color3.fromRGB(120, 220, 255)
-MapConfig.NEIGHBOR_OUTLINE_WIDTH = 2.2
+MapConfig.NEIGHBOR_OUTLINE_WIDTH = 4
 
 -- Roblox chat window: small, top-right (map stays the focus).
 MapConfig.CHAT_WIDTH_SCALE = 0.65
