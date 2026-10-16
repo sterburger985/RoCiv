@@ -447,18 +447,94 @@ local function generateOnce(seed: number, def: any, count: number, width: number
 	local rng = Random.new(seed)
 	local aspect = width / height
 
-	-- 1. Seed points (kept slightly away from the edges).
-	local margin = 0.01
-	local sites: { Vector2 } = table.create(count)
-	for i = 1, count do
-		sites[i] = Vector2.new(rng:NextNumber(width * margin, width * (1 - margin)), rng:NextNumber(height * margin, height * (1 - margin)))
-	end
+	-- 1. Geography shapes first: they decide where territories are small
+	--    (land, with variety) and where they are large (open sea).
+	local shapes, bays, islands, continentTarget = buildShapes(rng, def, aspect)
+	local noiseOff = Vector3.new(rng:NextNumber(-500, 500), rng:NextNumber(-500, 500), rng:NextNumber(0, 100))
+	local dz = rng:NextNumber(0, 100)
 
-	-- 2. Lloyd relaxation.
+	-- 2. Seed points by variable-radius dart throwing. Each candidate gets a
+	--    spacing radius from a density field: open sea is sparse (big sea
+	--    zones), land varies between large and small provinces. The base
+	--    radius is tuned so the territory count lands near the target.
+	local margin = 0.01
+	local nCand = count * 14
+	local cand: { Vector2 } = table.create(nCand)
+	local candScale: { number } = table.create(nCand)
+	local maxScale, minScale = 0, math.huge
+	for i = 1, nCand do
+		local p = Vector2.new(rng:NextNumber(width * margin, width * (1 - margin)), rng:NextNumber(height * margin, height * (1 - margin)))
+		local q = Vector2.new(p.X / height, p.Y / height)
+		local e = sampleElevation(q, shapes, bays, islands, noiseOff, aspect)
+		local landW = smoothstep(-0.3, 0.05, e)
+		local variety = 2 ^ (fbm(q.X * 2.4 + dz, q.Y * 2.4, dz, 2) * 2 * MapConfig.TERRITORY_SIZE_VARIETY)
+		local density = MapConfig.SEA_TERRITORY_DENSITY + (variety - MapConfig.SEA_TERRITORY_DENSITY) * landW
+		local sc = 1 / math.sqrt(math.max(density, 0.05))
+		cand[i] = p
+		candScale[i] = sc
+		maxScale = math.max(maxScale, sc)
+		minScale = math.min(minScale, sc)
+	end
+	local function throw(r0: number): { Vector2 }
+		local cell = r0 * minScale
+		local cols = math.max(1, math.ceil(width / cell))
+		local grid: { [number]: { number } } = {}
+		local reach = math.ceil(maxScale / minScale)
+		local accepted: { Vector2 } = {}
+		local acceptedR: { number } = {}
+		for i = 1, nCand do
+			local p = cand[i]
+			local r = r0 * candScale[i]
+			local gx, gy = math.floor(p.X / cell), math.floor(p.Y / cell)
+			local ok = true
+			for yy = gy - reach, gy + reach do
+				for xx = gx - reach, gx + reach do
+					local bucket = grid[yy * cols + xx]
+					if bucket and xx >= 0 and xx < cols then
+						for _, k in bucket do
+							local need = (r + acceptedR[k]) * 0.5
+							if (accepted[k] - p).Magnitude < need then
+								ok = false
+								break
+							end
+						end
+					end
+					if not ok then
+						break
+					end
+				end
+				if not ok then
+					break
+				end
+			end
+			if ok then
+				table.insert(accepted, p)
+				table.insert(acceptedR, r)
+				local key = gy * cols + gx
+				grid[key] = grid[key] or {}
+				table.insert(grid[key], #accepted)
+			end
+		end
+		return accepted
+	end
+	local r0 = math.sqrt(width * height / count) * 0.75
+	local sites = throw(r0)
+	for _ = 1, 5 do
+		local ratio = #sites / count
+		if math.abs(ratio - 1) < 0.04 then
+			break
+		end
+		r0 *= math.sqrt(ratio)
+		sites = throw(r0)
+	end
+	count = #sites
+
+	-- Light relaxation (half a Lloyd step) smooths slivers but keeps the
+	-- size variety.
 	for _ = 1, MapConfig.LLOYD_ITERATIONS do
 		local polys = computeCells(sites, width, height)
 		for i = 1, count do
-			sites[i] = Geometry.centroid(polys[i])
+			sites[i] = sites[i]:Lerp(Geometry.centroid(polys[i]), MapConfig.LLOYD_STRENGTH)
 		end
 	end
 
@@ -530,9 +606,7 @@ local function generateOnce(seed: number, def: any, count: number, width: number
 		t.neighbors = kept
 	end
 
-	-- 4. Geography field.
-	local shapes, bays, islands, continentTarget = buildShapes(rng, def, aspect)
-	local noiseOff = Vector3.new(rng:NextNumber(-500, 500), rng:NextNumber(-500, 500), rng:NextNumber(0, 100))
+	-- 4. Geography field (shapes were built in step 1).
 	local mx, my, mz = rng:NextNumber(-10000, 10000), rng:NextNumber(-10000, 10000), rng:NextNumber(0, 100)
 	local tundraJitter = {}
 	local rawElev: { [number]: number } = {}
@@ -561,7 +635,32 @@ local function generateOnce(seed: number, def: any, count: number, width: number
 	end
 
 	-- 5. Terrain.
-	local seaLevel = quantile(elevList, 1 - def.landFraction)
+	-- Sea level by AREA (territories differ in size): the lowest territories
+	-- covering (1 - landFraction) of the map become water.
+	local seaLevel
+	do
+		local order = table.clone(ids)
+		table.sort(order, function(a, b)
+			local ea, eb = territories[a].elevation, territories[b].elevation
+			if ea == eb then
+				return a < b
+			end
+			return ea < eb
+		end)
+		local total = 0
+		for _, id in ids do
+			total += territories[id].area
+		end
+		local acc = 0
+		seaLevel = 1
+		for _, id in order do
+			acc += territories[id].area
+			if acc >= total * (1 - def.landFraction) then
+				seaLevel = territories[id].elevation + 1e-6
+				break
+			end
+		end
+	end
 	for _, id in ids do
 		local t = territories[id]
 		if touchesEdge[id] and t.elevation >= seaLevel then
@@ -964,6 +1063,7 @@ local function generateOnce(seed: number, def: any, count: number, width: number
 		terrainCounts[tt] = (terrainCounts[tt] or 0) + 1
 	end
 	return {
+		count = count,
 		territories = territories,
 		ids = ids,
 		seaLevel = seaLevel,
@@ -1012,7 +1112,7 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 		attempt = attempt,
 		matchSize = sizeName,
 		civilizations = def.civilizations,
-		territoryCount = count,
+		territoryCount = result.count,
 		width = width,
 		height = height,
 		seaLevel = result.seaLevel,

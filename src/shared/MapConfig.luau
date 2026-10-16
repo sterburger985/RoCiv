@@ -22,46 +22,46 @@ MapConfig.MAX_TERRITORY_COUNT = 1400
 --   territories       strategic territories on the whole map (land + water)
 --   civilizations     players + AI the map is built for (start positions)
 --   continents        {min, max} major landmasses
---   landFraction      share of territories that are land
+--   landFraction      share of the map AREA that is land
 --   islandClusters    archipelagos placed in the open ocean
 --   peninsulas/bays   per continent {min, max}
 --   rivers / lakes    targets (generator places as many as geography allows)
 MapConfig.MATCH_SIZES = {
 	Quick = {
 		displayName = "Quick",
-		territories = 420,
+		territories = 180,
 		civilizations = 3,
 		continents = { 2, 3 },
 		landFraction = 0.40,
 		islandClusters = 2,
 		peninsulas = { 1, 2 },
 		bays = { 1, 2 },
-		rivers = 8,
-		lakes = 3,
+		rivers = 5,
+		lakes = 2,
 	},
 	Standard = {
 		displayName = "Standard",
-		territories = 720,
+		territories = 280,
 		civilizations = 6,
 		continents = { 3, 4 },
 		landFraction = 0.42,
 		islandClusters = 3,
 		peninsulas = { 1, 2 },
 		bays = { 1, 2 },
-		rivers = 13,
-		lakes = 5,
+		rivers = 8,
+		lakes = 3,
 	},
 	Long = {
 		displayName = "Long",
-		territories = 1000,
+		territories = 400,
 		civilizations = 8,
 		continents = { 4, 5 },
 		landFraction = 0.42,
 		islandClusters = 4,
 		peninsulas = { 1, 3 },
 		bays = { 1, 2 },
-		rivers = 18,
-		lakes = 7,
+		rivers = 11,
+		lakes = 4,
 	},
 }
 MapConfig.MATCH_SIZE_ORDER = { "Quick", "Standard", "Long" }
@@ -71,14 +71,14 @@ MapConfig.DEFAULT_TERRITORY_COUNT = MapConfig.MATCH_SIZES.Quick.territories
 
 -- A landmass counts as a continent when it has at least this many
 -- territories and this share of all land.
-MapConfig.CONTINENT_MIN_TERRITORIES = 18
+MapConfig.CONTINENT_MIN_TERRITORIES = 8
 MapConfig.CONTINENT_MIN_LAND_SHARE = 0.08
 -- Attempts (reseeded deterministically) before accepting a map that misses
 -- its continent target; a miss is reported as a validation error.
 MapConfig.GENERATION_ATTEMPTS = 8
 -- Start positions: minimum spacing (territory hops) and the fairness floor
 -- (smallest civ land share / largest share) reported by the validator.
-MapConfig.START_MIN_SPACING = 4
+MapConfig.START_MIN_SPACING = 3
 MapConfig.START_FAIRNESS_WARN = 0.35
 -- Rivers: minimum length in land territories; extra land move cost when a
 -- movement region contains river; fertility bonus for river territories.
@@ -87,7 +87,7 @@ MapConfig.RIVER_MOVE_COST = 0.5 -- extra cost to enter a river territory's regio
 MapConfig.RIVER_FERTILITY_BONUS = 0.15
 -- Inland water bodies up to this many territories stay as Lakes; larger
 -- ones are filled to land.
-MapConfig.LAKE_MAX_TERRITORIES = 4
+MapConfig.LAKE_MAX_TERRITORIES = 3
 
 -- World size. The map grows with the territory count so territories keep a
 -- consistent size: area = count * TERRITORY_AREA, shaped by MAP_ASPECT
@@ -110,7 +110,13 @@ function MapConfig.mapSizeFor(territoryCount: number): (number, number)
 end
 
 -- Lloyd relaxation passes. More passes = more evenly sized, rounder cells.
-MapConfig.LLOYD_ITERATIONS = 2
+MapConfig.LLOYD_ITERATIONS = 1
+MapConfig.LLOYD_STRENGTH = 0.5 -- 1 = full Lloyd step (evens sizes out); lower keeps variety
+-- Territory size variety: land density varies by 2^(+-VARIETY) (large and
+-- small provinces); open sea is SEA_TERRITORY_DENSITY times as dense (large
+-- sea zones).
+MapConfig.TERRITORY_SIZE_VARIETY = 1.1
+MapConfig.SEA_TERRITORY_DENSITY = 0.22
 
 -- Two territories are neighbours only if their shared border is at least
 -- this long (studs). Filters out "corner touches" that look like a point.
