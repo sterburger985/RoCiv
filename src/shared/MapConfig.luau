@@ -83,7 +83,7 @@ MapConfig.START_FAIRNESS_WARN = 0.35
 -- Rivers: minimum length in land territories; extra land move cost when a
 -- movement region contains river; fertility bonus for river territories.
 MapConfig.RIVER_MIN_LENGTH = 3
-MapConfig.RIVER_MOVE_COST = 1
+MapConfig.RIVER_MOVE_COST = 0.5 -- extra cost to enter a river territory's regions (roads remove it)
 MapConfig.RIVER_FERTILITY_BONUS = 0.15
 -- Inland water bodies up to this many territories stay as Lakes; larger
 -- ones are filled to land.
@@ -149,8 +149,27 @@ MapConfig.FOREST_MOISTURE = 0.70 -- above => forest
 
 -- Rendering ----------------------------------------------------------------
 
-MapConfig.MAP_ORIGIN_Y = 0 -- world Y of the top surface of the map
-MapConfig.TERRITORY_THICKNESS = 2
+MapConfig.MAP_ORIGIN_Y = 0 -- world Y of sea level (must be a multiple of 4: voxel grid)
+-- Unexplored territories: parchment slabs (Civilization VI style) whose top
+-- sits PARCHMENT_HEIGHT above sea level. The slabs are thick so their sides
+-- hide the terrain seam where known land meets the unexplored.
+MapConfig.PARCHMENT_HEIGHT = 5
+MapConfig.TERRITORY_THICKNESS = 36
+MapConfig.PARCHMENT_COLOR = Color3.fromRGB(214, 194, 150)
+MapConfig.PARCHMENT_LINE_COLOR = Color3.fromRGB(104, 82, 54) -- ink lines between parchment slabs
+
+-- Voxel terrain for known territories (TerrainPainter, presentation only).
+MapConfig.TERRAIN_DEPTH = 24 -- studs of solid terrain below sea level
+MapConfig.TERRAIN_BLEND_DISTANCE = 34 -- studs over which heights blend at borders
+MapConfig.TERRAIN_FRAME_BUDGET_MS = 6 -- painting time per frame (progressive reveal)
+MapConfig.RIVER_HALF_WIDTH = 5
+MapConfig.TERRAIN_WATER_COLOR = Color3.fromRGB(28, 96, 132)
+MapConfig.TERRAIN_WATER_TRANSPARENCY = 0.55
+MapConfig.TERRAIN_WATER_REFLECTANCE = 0.15
+MapConfig.TERRAIN_WATER_WAVE_SIZE = 0.05
+MapConfig.TERRAIN_WATER_WAVE_SPEED = 6
+MapConfig.OUTLINE_SEGMENT_LENGTH = 10 -- outlines follow terrain in pieces this long
+MapConfig.OWNER_OUTLINE_LIFT = 0.4
 -- Each territory is drawn inset by this many studs; the dark base plate
 -- shows through the gap and forms the border lines (2 * inset wide).
 MapConfig.BORDER_INSET = 1.25
@@ -160,8 +179,8 @@ MapConfig.BORDER_COLOR = Color3.fromRGB(24, 26, 32)
 -- selectable). The frame marks the playable edge; the backdrop is open sea
 -- that fills the rest of the view so there is no grey void.
 MapConfig.MAP_FRAME_WIDTH = 10
-MapConfig.MAP_FRAME_COLOR = Color3.fromRGB(14, 18, 26)
-MapConfig.BACKDROP_COLOR = Color3.fromRGB(22, 52, 92)
+MapConfig.MAP_FRAME_COLOR = Color3.fromRGB(62, 46, 30)
+MapConfig.BACKDROP_COLOR = Color3.fromRGB(26, 74, 108)
 MapConfig.BACKDROP_SIZE = 60000 -- studs, visual size (one scaled part)
 
 -- "Wedge"        two WedgeParts per polygon triangle. Default: works everywhere.
@@ -181,7 +200,7 @@ MapConfig.SELECTION_OUTLINE_COLOR = Color3.fromRGB(255, 214, 80)
 MapConfig.SELECTION_OUTLINE_WIDTH = 3
 MapConfig.HOVER_OUTLINE_COLOR = Color3.fromRGB(245, 245, 235)
 MapConfig.HOVER_OUTLINE_WIDTH = 1.2
-MapConfig.OWNER_OUTLINE_WIDTH = 1.6
+MapConfig.OWNER_OUTLINE_WIDTH = 4
 -- How strongly an owner's colour tints a territory's fill (0..1).
 MapConfig.OWNER_FILL_TINT = 0.28
 
@@ -203,11 +222,19 @@ MapConfig.OWNER_COLORS = {
 -- bloom wash the map out at strategic camera heights.
 MapConfig.MAP_ATMOSPHERE_DENSITY = 0
 MapConfig.DISABLE_POST_EFFECTS = true -- DepthOfField, Bloom, SunRays
-MapConfig.LIGHTING_CLOCK_TIME = 12 -- sun overhead = even lighting
-MapConfig.LIGHTING_BRIGHTNESS = 1.6
-MapConfig.LIGHTING_EXPOSURE = 0
+-- Warm afternoon sun with soft shadows so terrain relief reads (Humankind look).
+MapConfig.LIGHTING_CLOCK_TIME = 14.6
+MapConfig.LIGHTING_LATITUDE = 30
+MapConfig.LIGHTING_BRIGHTNESS = 2.6
+MapConfig.LIGHTING_EXPOSURE = 0.1
 MapConfig.LIGHTING_ENV_SPECULAR = 0
+MapConfig.LIGHTING_ENV_DIFFUSE = 0.6
+MapConfig.LIGHTING_SHADOW_SOFTNESS = 0.35
+MapConfig.LIGHTING_AMBIENT = Color3.fromRGB(70, 66, 60)
+MapConfig.LIGHTING_OUTDOOR_AMBIENT = Color3.fromRGB(128, 122, 112)
 MapConfig.LIGHTING_SATURATION = 0.12 -- ColorCorrection saturation boost
+MapConfig.LIGHTING_CONTRAST = 0.06
+MapConfig.LIGHTING_TINT = Color3.fromRGB(255, 250, 240)
 
 -- Tile design (presentation only) --------------------------------------------
 
@@ -250,9 +277,10 @@ MapConfig.FOG_OF_WAR_ENABLED = true
 -- centre. Range is in territories (neighbour hops).
 MapConfig.START_VISION_RANGE = 3
 -- Fog presentation (client only; never authoritative)
-MapConfig.FOG_UNEXPLORED_COLOR = Color3.fromRGB(34, 36, 44) -- close to the border colour so unexplored borders fade
-MapConfig.FOG_EXPLORED_GREY = Color3.fromRGB(70, 72, 80)
-MapConfig.FOG_EXPLORED_BLEND = 0.55 -- 0 = full colour, 1 = grey
+-- Explored-but-not-visible territories use sepia terrain materials
+-- (TerrainPainter); owner borders there fade toward this sepia.
+MapConfig.FOG_EXPLORED_SEPIA = Color3.fromRGB(150, 124, 88)
+MapConfig.FOG_EXPLORED_BLEND = 0.55 -- 0 = full colour, 1 = sepia
 
 -- Camera -------------------------------------------------------------------
 

@@ -2,11 +2,11 @@
 -- TerritoryStyle (client)
 -- Decides how a territory looks from the client's map state. Pure
 -- presentation: colours are derived from data and never read back as data.
--- Visual hierarchy (spec): terrain -> ownership tint/border -> borders ->
+-- Visual hierarchy (spec): terrain -> ownership border -> borders ->
 -- temporary selection emphasis -> fog of war.
---   Visible     terrain colour (shaded per territory) + owner tint
---   Explored    same, faded toward grey (last known state)
---   Unexplored  flat dark fog colour; no terrain, height or decorations
+--   Visible     full-colour voxel terrain (TerrainPainter) + owner border
+--   Explored    sepia terrain (Civilization VI style) + last-known owner
+--   Unexplored  flat parchment slab; no terrain, height or features
 
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("RoCiv"):WaitForChild("Shared")
@@ -71,19 +71,9 @@ function TerritoryStyle.isKnown(record: any): boolean
 	return record.state ~= "Unexplored" and record.terrainType ~= nil
 end
 
--- Tile height offset (studs). Unexplored tiles stay flat so height never
--- reveals hidden terrain.
-function TerritoryStyle.surfaceHeight(record: any): number
-	if not TerritoryStyle.isKnown(record) then
-		return 0
-	end
-	local def = TerrainTypes.get(record.terrainType)
-	return if def then def.surfaceHeight else 0
-end
-
 local function fogFade(color: Color3, record: any): Color3
 	if record.state == "Explored" then
-		return color:Lerp(MapConfig.FOG_EXPLORED_GREY, MapConfig.FOG_EXPLORED_BLEND)
+		return color:Lerp(MapConfig.FOG_EXPLORED_SEPIA, MapConfig.FOG_EXPLORED_BLEND)
 	end
 	return color
 end
@@ -91,8 +81,12 @@ end
 -- `emphasis` (0..1) lightens the fill for hover / selection feedback.
 function TerritoryStyle.fillColor(record: any, emphasis: number?): Color3
 	if not TerritoryStyle.isKnown(record) then
-		local fog = MapConfig.FOG_UNEXPLORED_COLOR
-		return if emphasis then quantise(fog:Lerp(Color3.new(1, 1, 1), emphasis * 0.5)) else fog
+		-- Parchment, very slightly varied per territory like aged paper.
+		local fog = shaded(MapConfig.PARCHMENT_COLOR, record.id)
+		if emphasis then
+			fog = fog:Lerp(Color3.new(1, 1, 1), emphasis * 0.6)
+		end
+		return quantise(fog)
 	end
 	local def = TerrainTypes.get(record.terrainType)
 	local color = shaded(if def then def.color else Color3.new(1, 0, 1), record.id)
@@ -107,26 +101,15 @@ function TerritoryStyle.fillColor(record: any, emphasis: number?): Color3
 	return quantise(color)
 end
 
--- Colour for terrain decorations (trees, peaks...), or nil for none.
-function TerritoryStyle.decorationColor(record: any): Color3?
-	if not TerritoryStyle.isKnown(record) then
-		return nil
-	end
-	local def = TerrainTypes.get(record.terrainType)
-	if not def or not def.decoration or not def.decorationColor then
-		return nil
-	end
-	return quantise(fogFade(def.decorationColor, record))
-end
-
--- Owner border colour, or nil when no border should be drawn.
+-- Owner border colour, or nil when no border should be drawn. Explored
+-- (last-known) borders are drawn in a sepia-faded version of the colour.
 function TerritoryStyle.ownerBorderColor(record: any): Color3?
 	if record.state == "Unexplored" then
 		return nil
 	end
 	local owner = TerritoryStyle.ownerColor(record.ownerId)
-	if owner then
-		owner = fogFade(owner, record)
+	if owner and record.state == "Explored" then
+		owner = owner:Lerp(MapConfig.FOG_EXPLORED_SEPIA, MapConfig.FOG_EXPLORED_BLEND)
 	end
 	return if owner then quantise(owner) else nil
 end

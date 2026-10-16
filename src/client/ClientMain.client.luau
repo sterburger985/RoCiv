@@ -48,13 +48,21 @@ local function applyMapLighting()
 	Lighting.Brightness = MapConfig.LIGHTING_BRIGHTNESS
 	Lighting.ExposureCompensation = MapConfig.LIGHTING_EXPOSURE
 	Lighting.EnvironmentSpecularScale = MapConfig.LIGHTING_ENV_SPECULAR
+	Lighting.GlobalShadows = true
+	Lighting.ShadowSoftness = MapConfig.LIGHTING_SHADOW_SOFTNESS
+	Lighting.Ambient = MapConfig.LIGHTING_AMBIENT
+	Lighting.OutdoorAmbient = MapConfig.LIGHTING_OUTDOOR_AMBIENT
+	Lighting.EnvironmentDiffuseScale = MapConfig.LIGHTING_ENV_DIFFUSE
+	Lighting.GeographicLatitude = MapConfig.LIGHTING_LATITUDE
 	local cc = Lighting:FindFirstChild("RoCivMapColor")
 	if not cc then
 		cc = Instance.new("ColorCorrectionEffect")
 		cc.Name = "RoCivMapColor"
 		cc.Parent = Lighting
 	end
-	(cc :: ColorCorrectionEffect).Saturation = MapConfig.LIGHTING_SATURATION
+	(cc :: ColorCorrectionEffect).Saturation = MapConfig.LIGHTING_SATURATION;
+	(cc :: ColorCorrectionEffect).Contrast = MapConfig.LIGHTING_CONTRAST;
+	(cc :: ColorCorrectionEffect).TintColor = MapConfig.LIGHTING_TINT
 end
 applyMapLighting()
 
@@ -169,6 +177,11 @@ state:onChanged(function(ids)
 		devPanel:refreshCivStatus()
 	end
 	player:SetAttribute("MapStateSeq", state.seq)
+end)
+
+-- Terrain painting finished for some territories: outlines follow it.
+renderer:onSurfaceChanged(function(ids)
+	selection:surfaceChanged(ids)
 end)
 
 -- Civilization list changes (names/colours/controllers): restyle everything.

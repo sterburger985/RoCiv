@@ -79,6 +79,7 @@ local function territoryView(player: Player, id: number): { [string]: any }
 		view.fertility = t.fertility
 		view.resources = t.resources
 		view.cityId = t.cityId
+		view.riverPath = t.riverPath -- river course inside this territory (nil = none)
 		-- Owner: live when visible, last-seen when only explored.
 		view.ownerId = if state == "Visible" then t.ownerId else VisibilitySystem.knownOwner(player, id)
 	end

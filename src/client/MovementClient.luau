@@ -158,7 +158,7 @@ end
 
 function MovementClient._centroidWorld(self: MovementClient, rid: number, lift: number): Vector3
 	local r = self.regions[rid]
-	return self.renderer:mapToWorld(r.centroid, self.renderer:surfaceY(r.territoryId) + lift)
+	return self.renderer:mapToWorld(r.centroid, self.renderer:heightAt(r.centroid) + lift)
 end
 
 -- Region borders inside known territories (territory borders are already
@@ -180,10 +180,17 @@ function MovementClient.drawRegionBorders(self: MovementClient)
 						for k = 1, m do
 							local c, d = o.polygon[k], o.polygon[k % m + 1]
 							if (a - d).Magnitude < 0.05 and (b - c).Magnitude < 0.05 then
-								local y = self.renderer:surfaceY(r.territoryId) + 0.08
-								-- Light lines read clearly on every terrain colour.
-								local part = linePart(self.renderer:mapToWorld(a, y), self.renderer:mapToWorld(b, y), 1.1, Color3.fromRGB(245, 240, 225), 0.35, false)
-								part.Parent = folder
+								-- Light lines read clearly on every terrain colour; split
+								-- into short pieces that follow the terrain.
+								local pieces = math.max(1, math.ceil((b - a).Magnitude / 10))
+								local prev = self.renderer:mapToWorld(a, self.renderer:heightAt(a) + 0.8)
+								for s = 1, pieces do
+									local q = a:Lerp(b, s / pieces)
+									local nextP = self.renderer:mapToWorld(q, self.renderer:heightAt(q) + 0.8)
+									local part = linePart(prev, nextP, 1.1, Color3.fromRGB(245, 240, 225), 0.35, false)
+									part.Parent = folder
+									prev = nextP
+								end
 								count += 1
 							end
 						end

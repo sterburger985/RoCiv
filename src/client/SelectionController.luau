@@ -123,8 +123,8 @@ function SelectionController._outline(self: SelectionController, id: number, wid
 	if not poly then
 		return nil
 	end
-	local base = self.renderer:surfaceY(id) - MapConfig.MAP_ORIGIN_Y
-	local outline = self.renderer:buildOutline(poly, width, color, base + lift)
+	-- Outlines follow the drawn surface (terrain or parchment).
+	local outline = self.renderer:buildOutline(poly, width, color, lift)
 	outline.Parent = parent or self.fx
 	return outline
 end
@@ -185,6 +185,25 @@ function SelectionController.refresh(self: SelectionController, changedIds: { nu
 	end
 end
 
+-- Terrain under some territories was (re)painted: redraw outlines that sit
+-- on it so they follow the new surface. Does not re-notify listeners.
+function SelectionController.surfaceChanged(self: SelectionController, ids: { number })
+	if not self.selectedId or not self.state then
+		return
+	end
+	local record = self.state:get(self.selectedId)
+	local affected = table.find(ids, self.selectedId) ~= nil
+	for _, nb in (if record then record.neighbors else {}) do
+		if table.find(ids, nb) then
+			affected = true
+			break
+		end
+	end
+	if affected then
+		self:_drawSelection()
+	end
+end
+
 function SelectionController.select(self: SelectionController, id: number?)
 	if id ~= nil and (not self.state or self.state:get(id) == nil) then
 		id = nil
@@ -229,13 +248,25 @@ function SelectionController._setHover(self: SelectionController, id: number?)
 	Players.LocalPlayer:SetAttribute("HoverTerritoryId", id or 0)
 end
 
--- Screen position -> point on the map plane (world), or nil.
+-- Screen position -> point on the drawn map (world), or nil. Rays hit the
+-- voxel terrain (known land and water) or a parchment slab (unexplored);
+-- the flat map plane is the fallback.
+local pickParams = RaycastParams.new()
+pickParams.FilterType = Enum.RaycastFilterType.Include
+pickParams.IgnoreWater = false
 function SelectionController.planePoint(screenPos: Vector2): Vector3?
 	local cam = workspace.CurrentCamera
 	if not cam then
 		return nil
 	end
 	local ray = cam:ViewportPointToRay(screenPos.X, screenPos.Y)
+	local mapFolder = workspace:FindFirstChild("StrategicMap")
+	local slabs = mapFolder and mapFolder:FindFirstChild("Territories")
+	pickParams.FilterDescendantsInstances = if slabs then { workspace.Terrain, slabs } else { workspace.Terrain }
+	local hit = workspace:Raycast(ray.Origin, ray.Direction * 20000, pickParams)
+	if hit then
+		return hit.Position
+	end
 	if math.abs(ray.Direction.Y) < 1e-6 then
 		return nil
 	end

@@ -16,6 +16,7 @@ local FILES = {
 	"src/client/MapRenderer.luau",
 	"src/client/MovementClient.luau",
 	"src/client/SelectionController.luau",
+	"src/client/TerrainPainter.luau",
 	"src/client/TerritoryInfoPanel.luau",
 	"src/client/TerritoryStyle.luau",
 	"src/server/Map/MapGenerator.luau",
