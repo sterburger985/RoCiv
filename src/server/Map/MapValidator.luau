@@ -243,22 +243,26 @@ function MapValidator.validate(map: any): Report
 		end
 	end
 	local missingLinks, falseLinks = {}, {}
-	for ai = 1, #ids do
-		local a = territories[ids[ai]]
-		if not a then
-			continue
+	-- Sweep over x so only polygons whose bounding boxes overlap are compared.
+	local sweep = {}
+	for _, id in ids do
+		if territories[id] then
+			table.insert(sweep, id)
 		end
+	end
+	table.sort(sweep, function(x, y)
+		return bboxes[x][1].X < bboxes[y][1].X
+	end)
+	for ai = 1, #sweep do
+		local a = territories[sweep[ai]]
 		local abox = bboxes[a.id]
-		for bi = ai + 1, #ids do
-			local b = territories[ids[bi]]
-			if not b then
-				continue
-			end
+		for bi = ai + 1, #sweep do
+			local b = territories[sweep[bi]]
 			local bbox = bboxes[b.id]
-			local overlap = abox[1].X <= bbox[2].X + POS_TOL
-				and bbox[1].X <= abox[2].X + POS_TOL
-				and abox[1].Y <= bbox[2].Y + POS_TOL
-				and bbox[1].Y <= abox[2].Y + POS_TOL
+			if bbox[1].X > abox[2].X + POS_TOL then
+				break
+			end
+			local overlap = abox[1].Y <= bbox[2].Y + POS_TOL and bbox[1].Y <= abox[2].Y + POS_TOL
 			local shared = 0
 			if overlap then
 				local na, nb = #a.polygon, #b.polygon
@@ -280,6 +284,18 @@ function MapValidator.validate(map: any): Report
 			elseif listed and not geomAdjacent then
 				table.insert(falseLinks, a.id)
 				table.insert(falseLinks, b.id)
+			end
+		end
+	end
+	-- Listed links between polygons whose boxes never overlap are missed by
+	-- the sweep; catch them directly.
+	for _, id in sweep do
+		local abox = bboxes[id]
+		for _, nb in territories[id].neighbors do
+			local bbox = bboxes[nb]
+			if bbox and (bbox[1].X > abox[2].X + POS_TOL or abox[1].X > bbox[2].X + POS_TOL or bbox[1].Y > abox[2].Y + POS_TOL or abox[1].Y > bbox[2].Y + POS_TOL) then
+				table.insert(falseLinks, id)
+				table.insert(falseLinks, nb)
 			end
 		end
 	end
@@ -342,8 +358,11 @@ function MapValidator.validate(map: any): Report
 		if t.fertility < 0 or t.fertility > 1 or t.fertility ~= t.fertility then
 			table.insert(badFert, id)
 		end
+		-- Ocean/Coast are exactly the territories below sea level; lakes are
+		-- inland water and may sit above it (basins).
 		local water = t.elevation < map.seaLevel
-		if water ~= def.isWater or t.isWater ~= def.isWater then
+		local isLake = t.terrainType == "Lake"
+		if t.isWater ~= def.isWater or (not isLake and water ~= def.isWater) then
 			table.insert(waterRule, id)
 		end
 		local nearLand = false
@@ -353,7 +372,7 @@ function MapValidator.validate(map: any): Report
 				nearLand = true
 			end
 		end
-		if (t.terrainType == "Coast") ~= (def.isWater and nearLand) then
+		if (t.terrainType == "Coast") ~= (def.isWater and not isLake and nearLand) then
 			table.insert(coastRule, id)
 		end
 		if (t.terrainType == "Mountains") ~= (not def.isWater and t.elevation >= map.mountainLevel) then
@@ -373,7 +392,24 @@ function MapValidator.validate(map: any): Report
 		err("terrain", "Water/land does not match elevation vs sea level", waterRule)
 	end
 	if #coastRule > 0 then
-		err("terrain", "Coast must be water touching land; Ocean must not touch land", coastRule)
+		err("terrain", "Coast must be sea touching land; Ocean must not touch land", coastRule)
+	end
+	-- Lakes must not connect to the open sea.
+	local lakeOnSea = {}
+	for _, id in ids do
+		local t = territories[id]
+		if t and t.terrainType == "Lake" then
+			for _, nb in t.neighbors do
+				local o = territories[nb]
+				if o and (o.terrainType == "Ocean" or o.terrainType == "Coast") then
+					table.insert(lakeOnSea, id)
+					break
+				end
+			end
+		end
+	end
+	if #lakeOnSea > 0 then
+		err("terrain", "Lakes touching the sea", lakeOnSea)
 	end
 	if #mountainRule > 0 then
 		err("terrain", "Mountains must be exactly the land at/above mountain level", mountainRule)
@@ -430,6 +466,144 @@ function MapValidator.validate(map: any): Report
 	for _, def in TerrainTypes.List do
 		if not counts[def.id] and #ids >= 100 then
 			warn("terrain", "Terrain type never generated: " .. def.id)
+		end
+	end
+
+	-- Geography: landmasses, continents, rivers, start positions ---------------
+	if map.landmasses then
+		table.insert(checksRun, "geography")
+		-- Landmass labels must match the flood fill above.
+		local badLabel = {}
+		for _, id in ids do
+			local t = territories[id]
+			if t then
+				local water = isWaterRecord(t)
+				if water and t.landmassId ~= 0 then
+					table.insert(badLabel, id)
+				elseif not water then
+					for _, nb in t.neighbors do
+						local o = territories[nb]
+						if o and not isWaterRecord(o) and o.landmassId ~= t.landmassId then
+							table.insert(badLabel, id)
+							break
+						end
+					end
+					if t.landmassId == 0 then
+						table.insert(badLabel, id)
+					end
+				end
+			end
+		end
+		if #badLabel > 0 then
+			err("geography", "Landmass labels inconsistent with land connectivity", badLabel)
+		end
+		if #map.landmasses ~= #masses then
+			err("geography", string.format("Generator reports %d landmasses, flood fill finds %d", #map.landmasses, #masses))
+		end
+		local def = MapConfig.MATCH_SIZES[map.matchSize]
+		info.continents = map.continentCount
+		if def and map.continentCount < def.continents[1] then
+			err("geography", string.format("%s map needs at least %d continents, has %d", map.matchSize, def.continents[1], map.continentCount))
+		end
+
+		-- Rivers: chains of neighbouring land territories ending at water.
+		local badRiver = {}
+		local riverCount = 0
+		for _, river in map.rivers or {} do
+			riverCount += 1
+			local path = river.territoryIds
+			local ok = #path >= MapConfig.RIVER_MIN_LENGTH
+			for i, tid in path do
+				local t = territories[tid]
+				if not t or isWaterRecord(t) or t.riverId ~= river.id or not t.riverPath or #t.riverPath < 2 then
+					ok = false
+				elseif i > 1 and not table.find(t.neighbors, path[i - 1]) then
+					ok = false
+				end
+			end
+			local last = territories[path[#path]]
+			local mouth = territories[river.mouth]
+			if not last or not mouth or not isWaterRecord(mouth) or not table.find(last.neighbors, river.mouth) then
+				ok = false
+			end
+			if not ok then
+				table.insert(badRiver, river.id)
+			end
+		end
+		info.rivers = riverCount
+		if #badRiver > 0 then
+			err("geography", "Rivers broken (not a land chain ending at water) [river ids]", badRiver)
+		end
+		local strayRiver = {}
+		for _, id in ids do
+			local t = territories[id]
+			if t and t.riverId ~= nil then
+				local r = map.rivers and map.rivers[t.riverId]
+				if not r or not table.find(r.territoryIds, id) then
+					table.insert(strayRiver, id)
+				end
+			end
+		end
+		if #strayRiver > 0 then
+			err("geography", "Territories tagged with a river that does not include them", strayRiver)
+		end
+
+		-- Start positions.
+		local starts = map.startPositions or {}
+		info.starts = #starts
+		if def and #starts ~= map.civilizations then
+			err("geography", string.format("Expected %d start positions, found %d", map.civilizations, #starts))
+		end
+		local badStart = {}
+		for i, sid in starts do
+			local t = territories[sid]
+			if not t or isWaterRecord(t) or t.terrainType == "Mountains" or table.find(starts, sid) ~= i then
+				table.insert(badStart, sid)
+			else
+				local lm = nil
+				for _, m in map.landmasses do
+					if m.id == t.landmassId then
+						lm = m
+					end
+				end
+				if not lm or not lm.isContinent then
+					table.insert(badStart, sid)
+				end
+			end
+		end
+		if #badStart > 0 then
+			err("geography", "Start positions on water/mountains, duplicated, or off-continent", badStart)
+		end
+		-- Spacing: land hops between starts on the same landmass.
+		local tooClose = {}
+		for i, a in starts do
+			if territories[a] then
+				local dist: { [number]: number } = { [a] = 0 }
+				local q, h = { a }, 1
+				while h <= #q do
+					local cur = q[h]
+					h += 1
+					if dist[cur] < MapConfig.START_MIN_SPACING then
+						for _, nb in territories[cur].neighbors do
+							local o = territories[nb]
+							if o and dist[nb] == nil and not isWaterRecord(o) then
+								dist[nb] = dist[cur] + 1
+								table.insert(q, nb)
+							end
+						end
+					end
+				end
+				for j = i + 1, #starts do
+					local d = dist[starts[j]]
+					if d and d < MapConfig.START_MIN_SPACING then
+						table.insert(tooClose, a)
+						table.insert(tooClose, starts[j])
+					end
+				end
+			end
+		end
+		if #tooClose > 0 then
+			err("geography", "Start positions closer than START_MIN_SPACING (pairs)", tooClose)
 		end
 	end
 
@@ -520,6 +694,9 @@ function MapValidator.format(report: Report): string
 			sizes[i] = tostring(s)
 		end
 		table.insert(lines, "  Land masses (territories): " .. table.concat(sizes, ", "))
+	end
+	if info.continents then
+		table.insert(lines, string.format("  Continents: %d  Rivers: %d  Starts: %d", info.continents, info.rivers or 0, info.starts or 0))
 	end
 	return table.concat(lines, "\n")
 end

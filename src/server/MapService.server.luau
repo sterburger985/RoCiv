@@ -173,10 +173,10 @@ end
 
 -- Map lifecycle --------------------------------------------------------------
 
-local function buildMap(seed: number, count: number)
+local function buildMap(seed: number, matchSize: string, count: number?)
 	generating = true
 	local t0 = os.clock()
-	local map = MapGenerator.generate({ seed = seed, territoryCount = count })
+	local map = MapGenerator.generate({ seed = seed, matchSize = matchSize, territoryCount = count })
 	local genMs = (os.clock() - t0) * 1000
 	local report = MapValidator.validate(map)
 	local text = MapValidator.format(report)
@@ -184,9 +184,15 @@ local function buildMap(seed: number, count: number)
 
 	print(
 		string.format(
-			"[MapService] Generated map seed=%d territories=%d size=%dx%d in %.1f ms (voronoi %.1f ms) fingerprint=%s",
+			"[MapService] Generated %s map seed=%d (base %d, attempt %d) territories=%d continents=%d rivers=%d starts=%d size=%dx%d in %.1f ms (voronoi %.1f ms) fingerprint=%s",
+			map.matchSize,
 			map.seed,
+			map.baseSeed,
+			map.attempt,
 			map.territoryCount,
+			map.continentCount,
+			#map.rivers,
+			#map.startPositions,
 			map.width,
 			map.height,
 			genMs,
@@ -226,10 +232,30 @@ local function buildMap(seed: number, count: number)
 
 	TerritorySystem.setMap(map)
 	movementGraph = graph
+	if DEV_TOOLS and #CivilizationSystem.ids() ~= map.civilizations then
+		-- Development: one test civilization per start position; testers keep
+		-- their slot order.
+		local testers = {}
+		for _, p in Players:GetPlayers() do
+			table.insert(testers, p)
+		end
+		CivilizationSystem.createTestCivilizations(map.civilizations)
+		for i, p in testers do
+			if i <= map.civilizations then
+				CivilizationSystem.assignPlayer(p, i)
+			end
+		end
+	end
 	VisibilitySystem.resetAll()
 	lastDevInfo = if DEV_TOOLS
 		then {
-			seed = map.seed,
+			seed = map.baseSeed,
+			actualSeed = map.seed,
+			attempt = map.attempt,
+			matchSize = map.matchSize,
+			continents = map.continentCount,
+			rivers = #map.rivers,
+			starts = #map.startPositions,
 			territoryCount = map.territoryCount,
 			width = map.width,
 			height = map.height,
@@ -259,7 +285,7 @@ getMap.OnServerInvoke = function(player: Player)
 	local payload = buildPayload(player)
 	payload.devInfo = lastDevInfo
 	if DEV_TOOLS then
-		payload.seed = (TerritorySystem.getMap() :: any).seed
+		payload.seed = (TerritorySystem.getMap() :: any).baseSeed
 	end
 	return payload
 end
@@ -366,9 +392,6 @@ CivilizationSystem.onChanged(broadcastCivs)
 
 local function onPlayerAdded(player: Player)
 	VisibilitySystem.addPlayer(player)
-	if TerritorySystem.getMap() and #VisibilitySystem.listSources(player) == 0 then
-		VisibilitySystem.giveStartVision(player)
-	end
 	if DEV_TOOLS then
 		-- Development: give each tester the first free test civilization.
 		for _, id in CivilizationSystem.ids() do
@@ -377,13 +400,28 @@ local function onPlayerAdded(player: Player)
 			end
 		end
 	end
+	-- After civ assignment so vision starts at that civ's start position.
+	if TerritorySystem.getMap() and #VisibilitySystem.listSources(player) == 0 then
+		VisibilitySystem.giveStartVision(player)
+	end
 end
 
 -- Test civilizations exist only for development; production rosters arrive
 -- with match setup in a later phase.
 if DEV_TOOLS then
-	CivilizationSystem.createTestCivilizations()
+	CivilizationSystem.createTestCivilizations(MapConfig.MATCH_SIZES[MapConfig.DEFAULT_MATCH_SIZE].civilizations)
 end
+
+-- Each player's starting vision is centred on their civilization's
+-- generated start position (players without one share start 1).
+VisibilitySystem.setStartResolver(function(player: Player): number?
+	local map = TerritorySystem.getMap() :: any
+	if not map or not map.startPositions or #map.startPositions == 0 then
+		return nil
+	end
+	local civId = CivilizationSystem.civilizationOf(player)
+	return map.startPositions[civId or 1] or map.startPositions[1]
+end)
 
 Players.PlayerAdded:Connect(onPlayerAdded)
 for _, p in Players:GetPlayers() do
@@ -405,17 +443,23 @@ end)
 -- Development remotes (Studio only) ------------------------------------------
 
 if devRegenerate then
-	devRegenerate.OnServerEvent:Connect(function(player: Player, seed: any, count: any)
+	devRegenerate.OnServerEvent:Connect(function(player: Player, seed: any, matchSize: any, count: any)
 		-- Defence in depth: never honour this outside Studio.
 		if not RunService:IsStudio() or generating then
 			return
 		end
-		if not isInt(seed) or type(count) ~= "number" or count ~= count then
+		if not isInt(seed) or type(matchSize) ~= "string" or MapConfig.MATCH_SIZES[matchSize] == nil then
 			return
 		end
-		count = math.clamp(math.floor(count), MapConfig.MIN_TERRITORY_COUNT, MapConfig.MAX_TERRITORY_COUNT)
-		print(string.format("[MapService] Dev regenerate requested by %s: seed=%d count=%d", player.Name, seed, count))
-		buildMap(seed, count)
+		-- Optional territory override (testing); nil = the match size's count.
+		if count ~= nil then
+			if type(count) ~= "number" or count ~= count then
+				return
+			end
+			count = math.clamp(math.floor(count), MapConfig.MIN_TERRITORY_COUNT, MapConfig.MAX_TERRITORY_COUNT)
+		end
+		print(string.format("[MapService] Dev regenerate requested by %s: seed=%d size=%s count=%s", player.Name, seed, matchSize, tostring(count)))
+		buildMap(seed, matchSize, count)
 	end)
 end
 
@@ -511,4 +555,4 @@ if devCommand then
 	end
 end
 
-buildMap(MapConfig.DEFAULT_SEED, MapConfig.DEFAULT_TERRITORY_COUNT)
+buildMap(MapConfig.DEFAULT_SEED, MapConfig.DEFAULT_MATCH_SIZE)

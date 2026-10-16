@@ -157,15 +157,25 @@ function VisibilitySystem.resetAll()
 	end
 end
 
+-- MapService supplies the start territory for a player (their
+-- civilization's generated start position); fallback = land nearest centre.
+local startResolver: ((Player) -> number?)? = nil
+function VisibilitySystem.setStartResolver(fn: (Player) -> number?)
+	startResolver = fn
+end
+
 function VisibilitySystem.giveStartVision(player: Player): { number }
 	local ps = states[player]
-	local start = TerritorySystem.landNearestCentre()
+	local start = if startResolver then startResolver(player) else nil
+	if not start or not TerritorySystem.get(start) then
+		start = TerritorySystem.landNearestCentre()
+	end
 	if not ps or not start then
 		return {}
 	end
 	local id = ps.nextSourceId
 	ps.nextSourceId += 1
-	ps.sources[id] = { territoryId = start, range = MapConfig.START_VISION_RANGE, label = "Start (placeholder)" }
+	ps.sources[id] = { territoryId = start, range = MapConfig.START_VISION_RANGE, label = "Start" }
 	return recompute(ps)
 end
 

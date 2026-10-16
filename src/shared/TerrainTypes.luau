@@ -44,6 +44,17 @@ local defs: { TerrainDef } = {
 		surfaceHeight = -0.6,
 	},
 	{
+		-- Lake = inland fresh water (not connected to the ocean).
+		id = "Lake",
+		displayName = "Lake",
+		color = Color3.fromRGB(64, 132, 170),
+		isWater = true,
+		baseFertility = 0.4,
+		moveCost = 1,
+		passableByLand = false,
+		surfaceHeight = -0.5,
+	},
+	{
 		id = "Grassland",
 		displayName = "Grassland",
 		color = Color3.fromRGB(104, 166, 70),

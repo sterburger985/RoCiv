@@ -10,9 +10,84 @@ local MapConfig = {}
 -- Generation ---------------------------------------------------------------
 
 MapConfig.DEFAULT_SEED = 12345
-MapConfig.DEFAULT_TERRITORY_COUNT = 260
 MapConfig.MIN_TERRITORY_COUNT = 20
-MapConfig.MAX_TERRITORY_COUNT = 600
+MapConfig.MAX_TERRITORY_COUNT = 1400
+
+-- Match sizes ------------------------------------------------------------------
+-- Each match length gets its own map. Sizes are tuned so every civilization
+-- has room to expand, and the generator guarantees the minimum number of
+-- continents (major landmasses). Quick follows the "three players, at least
+-- two continents" target; Standard and Long follow the design document's
+-- civilization counts.
+--   territories       strategic territories on the whole map (land + water)
+--   civilizations     players + AI the map is built for (start positions)
+--   continents        {min, max} major landmasses
+--   landFraction      share of territories that are land
+--   islandClusters    archipelagos placed in the open ocean
+--   peninsulas/bays   per continent {min, max}
+--   rivers / lakes    targets (generator places as many as geography allows)
+MapConfig.MATCH_SIZES = {
+	Quick = {
+		displayName = "Quick",
+		territories = 420,
+		civilizations = 3,
+		continents = { 2, 3 },
+		landFraction = 0.40,
+		islandClusters = 2,
+		peninsulas = { 1, 2 },
+		bays = { 1, 2 },
+		rivers = 8,
+		lakes = 3,
+	},
+	Standard = {
+		displayName = "Standard",
+		territories = 720,
+		civilizations = 6,
+		continents = { 3, 4 },
+		landFraction = 0.42,
+		islandClusters = 3,
+		peninsulas = { 1, 2 },
+		bays = { 1, 2 },
+		rivers = 13,
+		lakes = 5,
+	},
+	Long = {
+		displayName = "Long",
+		territories = 1000,
+		civilizations = 8,
+		continents = { 4, 5 },
+		landFraction = 0.42,
+		islandClusters = 4,
+		peninsulas = { 1, 3 },
+		bays = { 1, 2 },
+		rivers = 18,
+		lakes = 7,
+	},
+}
+MapConfig.MATCH_SIZE_ORDER = { "Quick", "Standard", "Long" }
+MapConfig.DEFAULT_MATCH_SIZE = "Quick"
+-- Kept for code paths that ask for a plain territory count.
+MapConfig.DEFAULT_TERRITORY_COUNT = MapConfig.MATCH_SIZES.Quick.territories
+
+-- A landmass counts as a continent when it has at least this many
+-- territories and this share of all land.
+MapConfig.CONTINENT_MIN_TERRITORIES = 18
+MapConfig.CONTINENT_MIN_LAND_SHARE = 0.08
+-- Attempts (reseeded deterministically) before accepting a map that misses
+-- its continent target; a miss is reported as a validation error.
+MapConfig.GENERATION_ATTEMPTS = 8
+-- Start positions: minimum spacing (territory hops) and the fairness floor
+-- (smallest civ land share / largest share) reported by the validator.
+MapConfig.START_MIN_SPACING = 4
+MapConfig.START_FAIRNESS_WARN = 0.35
+-- Rivers: minimum length in land territories; extra land move cost when a
+-- movement region contains river; fertility bonus for river territories.
+MapConfig.RIVER_MIN_LENGTH = 3
+MapConfig.RIVER_MOVE_COST = 1
+MapConfig.RIVER_FERTILITY_BONUS = 0.15
+-- Inland water bodies up to this many territories stay as Lakes; larger
+-- ones are filled to land.
+MapConfig.LAKE_MAX_TERRITORIES = 4
 
 -- World size. The map grows with the territory count so territories keep a
 -- consistent size: area = count * TERRITORY_AREA, shaped by MAP_ASPECT
@@ -43,8 +118,8 @@ MapConfig.MIN_SHARED_EDGE_LENGTH = 4
 
 -- Terrain ------------------------------------------------------------------
 
--- Target share of territories that are land (before lake filling).
-MapConfig.LAND_FRACTION = 0.55
+-- Default land share when no match size is given (match sizes override it).
+MapConfig.LAND_FRACTION = 0.42
 -- Share of LAND territories that become mountains (highest elevations).
 MapConfig.MOUNTAIN_FRACTION = 0.08
 -- Territories touching the map edge are forced to water so the world is

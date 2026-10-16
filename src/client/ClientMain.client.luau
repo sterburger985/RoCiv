@@ -107,8 +107,8 @@ end
 
 if RunService:IsStudio() and devRemote and devCommand then
 	devPanel = DevMapPanel.new({
-		regenerate = function(seed, count)
-			devRemote:FireServer(seed, count)
+		regenerate = function(seed, matchSize)
+			devRemote:FireServer(seed, matchSize)
 		end,
 		command = function(cmd)
 			local ok, res = pcall(function()
