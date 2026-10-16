@@ -13,7 +13,7 @@ export type TerrainDef = {
 	moveCost: number, -- cost to enter a region of this terrain (Phase 3)
 	passableByLand: boolean,
 	surfaceHeight: number, -- tile height offset in studs (presentation)
-	decoration: string?, -- "Trees" | "Peaks" | "Snow" | "Dunes" | nil (presentation)
+	decoration: string?, -- "Trees" | "Peaks" | "Snow" | "Dunes" | "Fields" | "Meadow" | "Waves" | nil (presentation)
 	decorationColor: Color3?,
 }
 
@@ -29,6 +29,8 @@ local defs: { TerrainDef } = {
 		moveCost = 1,
 		passableByLand = false,
 		surfaceHeight = -0.9,
+		decoration = "Waves",
+		decorationColor = Color3.fromRGB(96, 140, 196),
 	},
 	{
 		-- Coast = shallow water next to land (Civilization convention).
@@ -50,6 +52,8 @@ local defs: { TerrainDef } = {
 		moveCost = 1,
 		passableByLand = true,
 		surfaceHeight = 0,
+		decoration = "Meadow",
+		decorationColor = Color3.fromRGB(86, 146, 58),
 	},
 	{
 		id = "Plains",
@@ -60,6 +64,8 @@ local defs: { TerrainDef } = {
 		moveCost = 1,
 		passableByLand = true,
 		surfaceHeight = 0,
+		decoration = "Fields",
+		decorationColor = Color3.fromRGB(172, 150, 66),
 	},
 	{
 		id = "Forest",

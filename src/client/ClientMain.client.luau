@@ -135,6 +135,14 @@ if RunService:IsStudio() and devRemote and devCommand then
 			setRange = function(on, budget)
 				movement:setRange(on, budget)
 			end,
+			buildRoad = function()
+				return movement:buildRoadAlongRoute(function(cmd)
+					local ok, res = pcall(function()
+						return devCommand:InvokeServer(cmd)
+					end)
+					return if ok then res else nil
+				end)
+			end,
 		},
 	})
 	movement:onStatus(function(text)

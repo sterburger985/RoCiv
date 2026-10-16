@@ -134,6 +134,7 @@ end
 function MovementClient.load(self: MovementClient)
 	self:resetRoute()
 	self:_clearSub("RegionBorders")
+	self:_clearSub("Roads") -- a new map starts without roads
 	local payload = (self.remotes:WaitForChild("GetMovementGraph") :: RemoteFunction):InvokeServer()
 	self.version = payload.version
 	self.list = payload.regions
@@ -386,6 +387,33 @@ function MovementClient.planRoute(self: MovementClient, startId: number, goalId:
 	self:_drawMarker(goalId, Color3.fromRGB(255, 120, 90), "Goal")
 	self:_requestRange()
 	self:_requestRoute()
+end
+
+-- Development: mark the land regions of the current route as road (server
+-- validates) and draw the road. Re-plans so the new cost is shown.
+function MovementClient.buildRoadAlongRoute(self: MovementClient, devCommand: (any) -> any): number
+	local route = self.lastRoute
+	if not route or not route.ok then
+		self:_status("Plan a route first.")
+		return 0
+	end
+	local res = devCommand({ cmd = "SetRoads", regionIds = route.path, value = true })
+	if not res or not res.ok then
+		self:_status("Road command rejected.")
+		return 0
+	end
+	local folder = self:_sub("Roads")
+	for i = 2, #route.path do
+		local a, b = route.path[i - 1], route.path[i]
+		local ra, rb = self.regions[a], self.regions[b]
+		if ra and rb then
+			local seg = linePart(self:_centroidWorld(a, 0.3), self:_centroidWorld(b, 0.3), 2.2, Color3.fromRGB(122, 92, 60), 0, false)
+			seg.Name = "Road"
+			seg.Parent = folder
+		end
+	end
+	self:_requestRoute()
+	return res.changed or 0
 end
 
 function MovementClient.clearAll(self: MovementClient)

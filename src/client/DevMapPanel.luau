@@ -24,6 +24,7 @@ export type Callbacks = {
 		setRouteTool: (on: boolean) -> (),
 		setDomain: (domain: string) -> (),
 		setRange: (on: boolean, budget: number) -> (),
+		buildRoad: () -> number,
 	},
 }
 
@@ -254,7 +255,9 @@ function DevMapPanel.new(cb: Callbacks): DevMapPanel
 	caption(r7, "MP", UDim.new(0.75, 4), UDim.new(0, 20))
 	local budgetBox = box(r7, "BudgetBox", "6", UDim.new(0.75, 24), UDim.new(0.25, -24))
 	budgetBox.Text = "6"
-	local moveStatus = statusLabel(body, 33, "MoveStatus")
+	local r7b = row(body, "MoveRow3", 33, 24)
+	local roadBtn = button(r7b, "RoadButton", "Road along route (test)", UDim.new(0, 0), UDim.new(1, 0))
+	local moveStatus = statusLabel(body, 34, "MoveStatus")
 
 	-- Debug
 	heading(body, 40, "DEBUG")
@@ -338,6 +341,11 @@ function DevMapPanel.new(cb: Callbacks): DevMapPanel
 		if b then
 			cb.movement.setRange(rangeBtn.Text:find("ON") ~= nil, b)
 		end
+	end)
+
+	roadBtn.Activated:Connect(function()
+		local n = cb.movement.buildRoad()
+		say(string.format("Road placed on %d land regions of the route", n))
 	end)
 
 	toggle(overlay, "Overlay (ids + links)", false, function()

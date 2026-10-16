@@ -466,6 +466,22 @@ if devCommand then
 			end
 			local ok, reason = TerritorySystem.clearOwner(cmd.territoryId)
 			return { ok = ok, message = reason }
+		elseif name == "SetRoads" then
+			-- Placeholder roads (real road building arrives with improvements).
+			local graph = movementGraph
+			if not graph or type(cmd.regionIds) ~= "table" or #cmd.regionIds > 500 then
+				return { ok = false, message = "bad args" }
+			end
+			local value = cmd.value == true
+			local n = 0
+			for _, rid in cmd.regionIds do
+				local r = if isInt(rid) then graph.regions[rid] else nil
+				if r and not r.isWater then
+					r.hasRoad = value
+					n += 1
+				end
+			end
+			return { ok = true, changed = n }
 		elseif name == "CivStatus" then
 			local civs = {}
 			for _, id in CivilizationSystem.ids() do

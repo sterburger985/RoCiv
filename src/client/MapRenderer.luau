@@ -344,6 +344,7 @@ local function decoPart(shape: string, color: Color3, size: Vector3, cf: CFrame,
 	p.Size = size
 	p.CFrame = cf
 	p:SetAttribute("DecoTint", tag)
+	p:SetAttribute("BaseColor", color)
 	return p
 end
 
@@ -364,19 +365,21 @@ function MapRenderer._buildDecorations(self: MapRenderer, record: any, height: n
 	if not kind then
 		return nil
 	end
-	local poly = Geometry.insetConvex(self.polygons[record.id], 7)
+	local poly = Geometry.insetConvex(self.polygons[record.id], if kind == "Peaks" then 10 else 7)
 	local area = Geometry.signedArea(poly)
 	if area < 80 then
 		return nil
 	end
-	local caps = { Trees = 7, Peaks = 3, Snow = 4, Dunes = 3 }
-	local n = math.clamp(math.floor(area * MapConfig.DECORATION_DENSITY + 0.5), 1, caps[kind] or 3)
+	local cap = MapConfig.DECORATION_CAPS[kind] or 3
+	local n = math.clamp(math.floor(area * MapConfig.DECORATION_DENSITY + 0.5), 1, cap)
 	local rng = Random.new(record.id * 7919 + #kind)
 	local lo, hi = Geometry.bounds(poly)
 	local top = MapConfig.MAP_ORIGIN_Y + height
 	local model = Instance.new("Model")
 	model.Name = "Decor_" .. record.id
 	local placed, guard = 0, 0
+	-- Accent colours derived from the main decoration colour (tinted with it
+	-- when fog fades the territory, because every part uses a tint tag).
 	while placed < n and guard < n * 40 do
 		guard += 1
 		local p = Vector2.new(rng:NextNumber(lo.X, hi.X), rng:NextNumber(lo.Y, hi.Y))
@@ -385,24 +388,64 @@ function MapRenderer._buildDecorations(self: MapRenderer, record: any, height: n
 			local w = self:mapToWorld(p, top)
 			local yaw = rng:NextNumber(0, math.pi * 2)
 			if kind == "Trees" then
-				local d = rng:NextNumber(7, 10)
-				decoPart("Ball", color, Vector3.new(d, d, d), CFrame.new(w + Vector3.new(0, d * 0.3, 0)), "Base").Parent = model
-				local d2 = d * rng:NextNumber(0.55, 0.75)
-				local off = Vector3.new(math.cos(yaw), 0, math.sin(yaw)) * d * 0.55
-				decoPart("Ball", color, Vector3.new(d2, d2, d2), CFrame.new(w + off + Vector3.new(0, d2 * 0.3, 0)), "Base").Parent =
-					model
+				-- Small clump of 2-3 round canopies.
+				local d = rng:NextNumber(8, 11)
+				decoPart("Ball", color, Vector3.new(d, d * 0.9, d), CFrame.new(w + Vector3.new(0, d * 0.35, 0)), "Base").Parent = model
+				for k = 1, rng:NextInteger(1, 2) do
+					local a = yaw + k * 2.1
+					local d2 = d * rng:NextNumber(0.55, 0.8)
+					local off = Vector3.new(math.cos(a), 0, math.sin(a)) * d * 0.6
+					decoPart("Ball", color, Vector3.new(d2, d2 * 0.9, d2), CFrame.new(w + off + Vector3.new(0, d2 * 0.35, 0)), "Base").Parent =
+						model
+				end
 			elseif kind == "Peaks" then
-				local L, H, W = rng:NextNumber(12, 18), rng:NextNumber(8, 12), rng:NextNumber(12, 17)
+				-- Rocky ridge with a snow cap and a smaller foothill beside it.
+				local L, H, W = rng:NextNumber(22, 32), rng:NextNumber(14, 20), rng:NextNumber(18, 26)
 				local base = CFrame.new(w) * CFrame.Angles(0, yaw, 0)
 				ridge(model, base, L, H, W, color, "Base")
-				local k = 0.36
-				ridge(model, base * CFrame.new(0, H * (1 - k), 0), L * k * 1.4, H * k, W * k, SNOW, "Snow")
+				local k = 0.34
+				ridge(model, base * CFrame.new(0, H * (1 - k), 0), L * k * 1.3, H * k, W * k, SNOW, "Snow")
+				ridge(model, base * CFrame.new(L * 0.45, 0, W * 0.25), L * 0.55, H * 0.55, W * 0.6, color, "Base")
 			elseif kind == "Snow" then
-				local d = rng:NextNumber(6, 10)
-				decoPart("Cylinder", color, Vector3.new(0.3, d, d), CFrame.new(w + Vector3.new(0, 0.15, 0)) * CFrame.Angles(0, 0, math.pi * 0.5), "Base").Parent =
+				local d = rng:NextNumber(10, 16)
+				decoPart("Cylinder", color, Vector3.new(0.3, d, d * rng:NextNumber(0.6, 0.9)), CFrame.new(w + Vector3.new(0, 0.15, 0)) * CFrame.Angles(0, yaw, math.pi * 0.5), "Base").Parent =
 					model
+				-- A few sparse firs on the tundra.
+				if rng:NextNumber() < 0.5 then
+					local h2 = rng:NextNumber(6, 9)
+					ridge(model, CFrame.new(w + Vector3.new(d * 0.6, 0, 0)), 3, h2, 3, Color3.fromRGB(52, 84, 66), "Fixed")
+				end
 			elseif kind == "Dunes" then
-				ridge(model, CFrame.new(w) * CFrame.Angles(0, yaw, 0), rng:NextNumber(12, 18), rng:NextNumber(1.2, 2), rng:NextNumber(6, 9), color, "Base")
+				-- Broad, low crescent: a wide gentle ridge plus a shorter one.
+				local base = CFrame.new(w) * CFrame.Angles(0, yaw, 0)
+				ridge(model, base, rng:NextNumber(18, 26), rng:NextNumber(1.6, 2.4), rng:NextNumber(10, 14), color, "Base")
+				ridge(model, base * CFrame.new(5, 0, 5) * CFrame.Angles(0, 0.5, 0), rng:NextNumber(10, 14), 1.4, 8, color, "Base")
+			elseif kind == "Fields" then
+				-- Farm plot: a few parallel strips, alternating tones.
+				local base = CFrame.new(w + Vector3.new(0, 0.12, 0)) * CFrame.Angles(0, yaw, 0)
+				local strips = rng:NextInteger(3, 4)
+				local len = rng:NextNumber(18, 26)
+				for k = 1, strips do
+					local tag = if k % 2 == 0 then "Base" else "Light"
+					decoPart("Block", color, Vector3.new(len, 0.24, 3.2), base * CFrame.new(0, 0, (k - (strips + 1) / 2) * 3.6), tag).Parent =
+						model
+				end
+			elseif kind == "Meadow" then
+				-- Low bushes.
+				for k = 1, 3 do
+					local a = yaw + k * 2.1
+					local d = rng:NextNumber(4, 6)
+					local off = Vector3.new(math.cos(a), 0, math.sin(a)) * rng:NextNumber(2, 6)
+					decoPart("Ball", color, Vector3.new(d, d * 0.55, d), CFrame.new(w + off + Vector3.new(0, d * 0.15, 0)), "Base").Parent =
+						model
+				end
+			elseif kind == "Waves" then
+				-- Two short light arcs on open water.
+				local base = CFrame.new(w + Vector3.new(0, 0.08, 0)) * CFrame.Angles(0, yaw, 0)
+				for k = -1, 1, 2 do
+					local seg = decoPart("Block", color, Vector3.new(9, 0.16, 0.9), base * CFrame.new(k * 4.2, 0, math.abs(k) * 1.4) * CFrame.Angles(0, -k * 0.35, 0), "Light")
+					seg.Parent = model
+				end
 			end
 		end
 	end
@@ -469,9 +512,22 @@ function MapRenderer._applyStyle(self: MapRenderer, record: any)
 	end
 	if v.decor and decoColor then
 		local snow = if record.state == "Explored" then SNOW:Lerp(MapConfig.FOG_EXPLORED_GREY, MapConfig.FOG_EXPLORED_BLEND) else SNOW
+		local light = decoColor:Lerp(Color3.new(1, 1, 1), 0.28)
 		for _, p in v.decor:GetChildren() do
 			if p:IsA("BasePart") then
-				p.Color = if p:GetAttribute("DecoTint") == "Snow" then snow else decoColor
+				local tag = p:GetAttribute("DecoTint")
+				if tag == "Snow" then
+					p.Color = snow
+				elseif tag == "Light" then
+					p.Color = light
+				elseif tag == "Fixed" then
+					local base = p:GetAttribute("BaseColor") :: Color3?
+					if base then
+						p.Color = if record.state == "Explored" then base:Lerp(MapConfig.FOG_EXPLORED_GREY, MapConfig.FOG_EXPLORED_BLEND) else base
+					end
+				else
+					p.Color = decoColor
+				end
 			end
 		end
 	end

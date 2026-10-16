@@ -141,7 +141,9 @@ MapConfig.LIGHTING_SATURATION = 0.12 -- ColorCorrection saturation boost
 MapConfig.TILE_SHADE_VARIATION = 0.05
 -- Small terrain decorations (trees, peaks, snow, dunes) on known territories.
 MapConfig.TILE_DECORATIONS = true
-MapConfig.DECORATION_DENSITY = 1 / 2600 -- decorations per stud^2 of territory
+MapConfig.DECORATION_DENSITY = 1 / 1700 -- decorations per stud^2 of territory
+-- Upper limit per territory for each decoration kind (keeps part counts low).
+MapConfig.DECORATION_CAPS = { Trees = 12, Peaks = 5, Snow = 5, Dunes = 5, Fields = 4, Meadow = 5, Waves = 3 }
 
 -- Selected territory: its direct neighbours get a temporary outline.
 MapConfig.NEIGHBOR_OUTLINE_COLOR = Color3.fromRGB(120, 220, 255)
