@@ -198,6 +198,25 @@ state:onCivilizationsChanged(function()
 	player:SetAttribute("YourCivilizationId", state.yourCivilizationId or 0)
 end)
 
+-- Studio test hook: setting the LocalPlayer attribute "RunFogCheck" runs
+-- the slow voxel-level fog check (every unexplored territory's columns must
+-- be empty once painting has finished) and reports the result.
+if RunService:IsStudio() then
+	player:GetAttributeChangedSignal("RunFogCheck"):Connect(function()
+		if not player:GetAttribute("RunFogCheck") or not renderer.state then
+			return
+		end
+		local t0 = os.clock()
+		local leaks = renderer:deepFogCheck(state)
+		local ok = renderer:validate(state)
+		player:SetAttribute("FogCheckLeaks", #leaks)
+		player:SetAttribute("FogCheckRenderOk", ok)
+		player:SetAttribute("FogCheckMs", (os.clock() - t0) * 1000)
+		player:SetAttribute("RunFogCheck", false)
+		print(string.format("[ClientMain] Deep fog check: %d leaking territories, render check %s", #leaks, if ok then "PASS" else "FAIL"))
+	end)
+end
+
 local loading = false
 local pendingReload = false
 
