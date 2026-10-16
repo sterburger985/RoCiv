@@ -147,7 +147,7 @@ MapConfig.DECORATION_CAPS = { Trees = 12, Peaks = 5, Snow = 5, Dunes = 5, Fields
 
 -- Selected territory: its direct neighbours get a temporary outline.
 MapConfig.NEIGHBOR_OUTLINE_COLOR = Color3.fromRGB(120, 220, 255)
-MapConfig.NEIGHBOR_OUTLINE_WIDTH = 1.4
+MapConfig.NEIGHBOR_OUTLINE_WIDTH = 2.2
 
 -- Roblox chat window: small, top-right (map stays the focus).
 MapConfig.CHAT_WIDTH_SCALE = 0.65

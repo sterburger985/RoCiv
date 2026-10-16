@@ -277,7 +277,7 @@ function MovementGraph.validate(graph: Graph, map: any): (boolean, { string }, {
 				bad("region " .. rid .. " duplicate neighbour " .. nb)
 			elseif not table.find(o.neighbors, rid) then
 				bad("one-way link " .. rid .. " -> " .. nb)
-			elseif o.territoryId ~= r.territoryId and not table.find(map.territories[r.territoryId].neighbors, o.territoryId) then
+			elseif o.territoryId ~= r.territoryId and not (map.territories[r.territoryId] and table.find(map.territories[r.territoryId].neighbors, o.territoryId)) then
 				bad(string.format("regions %d/%d link non-neighbouring territories", rid, nb))
 			end
 			seen[nb] = true
@@ -318,7 +318,7 @@ function MovementGraph.validate(graph: Graph, map: any): (boolean, { string }, {
 		local r = regions[rid]
 		for _, nb in r.neighbors do
 			local o = regions[nb]
-			if o.territoryId ~= r.territoryId then
+			if o and o.territoryId ~= r.territoryId then
 				crossings[math.min(r.territoryId, o.territoryId) .. ":" .. math.max(r.territoryId, o.territoryId)] = true
 			end
 		end
@@ -341,7 +341,8 @@ function MovementGraph.validate(graph: Graph, map: any): (boolean, { string }, {
 			local cur = q[h]
 			h += 1
 			for _, nb in regions[cur].neighbors do
-				if not visited[nb] then
+				-- Missing ids are reported above; never follow them.
+				if regions[nb] and not visited[nb] then
 					visited[nb] = true
 					table.insert(q, nb)
 				end

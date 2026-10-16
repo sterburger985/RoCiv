@@ -252,7 +252,7 @@ end
 
 function MovementClient._drawMarker(self: MovementClient, rid: number, color: Color3, name: string)
 	local folder = self:_sub("Route")
-	local m = dot(self:_centroidWorld(rid, 0.3), 9, color)
+	local m = dot(self:_centroidWorld(rid, 0.3), 16, color)
 	m.Name = name
 	m.Parent = folder
 end
@@ -271,7 +271,7 @@ function MovementClient._requestRange(self: MovementClient)
 		if self.regions[entry.id] then
 			local frac = if res.budget > 0 then entry.cost / res.budget else 0
 			local color = Color3.fromRGB(90, 230, 140):Lerp(Color3.fromRGB(255, 170, 60), math.clamp(frac, 0, 1))
-			local d = dot(self:_centroidWorld(entry.id, 0.25), 5, color)
+			local d = dot(self:_centroidWorld(entry.id, 0.25), 9, color)
 			d.Parent = folder
 		end
 	end
@@ -304,10 +304,10 @@ function MovementClient._requestRoute(self: MovementClient)
 		local a = self:_centroidWorld(res.path[i - 1], 0.45)
 		local b = self:_centroidWorld(res.path[i], 0.45)
 		-- Dark casing under a bright core keeps the route readable on light tiles.
-		local casing = linePart(a - Vector3.new(0, 0.05, 0), b - Vector3.new(0, 0.05, 0), 3.4, Color3.fromRGB(28, 24, 18), 0.15, false)
+		local casing = linePart(a - Vector3.new(0, 0.05, 0), b - Vector3.new(0, 0.05, 0), 6.5, Color3.fromRGB(28, 24, 18), 0.1, false)
 		casing.Name = "StepCasing"
 		casing.Parent = folder
-		local seg = linePart(a, b, 1.8, Color3.fromRGB(255, 205, 70), 0, true)
+		local seg = linePart(a, b, 3.4, Color3.fromRGB(255, 205, 70), 0, true)
 		seg.Name = "Step"
 		seg.Parent = folder
 	end
