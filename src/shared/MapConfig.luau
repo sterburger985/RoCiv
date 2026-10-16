@@ -82,7 +82,7 @@ MapConfig.START_MIN_SPACING = 4
 MapConfig.START_FAIRNESS_WARN = 0.35
 -- Rivers: minimum length in land territories; extra land move cost when a
 -- movement region contains river; fertility bonus for river territories.
-MapConfig.RIVER_MIN_LENGTH = 3
+MapConfig.RIVER_MIN_LENGTH = 2
 MapConfig.RIVER_MOVE_COST = 0.5 -- extra cost to enter a river territory's regions (roads remove it)
 MapConfig.RIVER_FERTILITY_BONUS = 0.15
 -- Inland water bodies up to this many territories stay as Lakes; larger

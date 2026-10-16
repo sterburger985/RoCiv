@@ -787,7 +787,7 @@ local function generateOnce(seed: number, def: any, count: number, width: number
 		if #rivers >= def.rivers then
 			break
 		end
-		-- Keep rivers apart: no river already in or next to the source.
+		-- Keep rivers apart: the source must not touch an existing river.
 		local crowded = hasRiver[src]
 		for _, nb in territories[src].neighbors do
 			if hasRiver[nb] then
