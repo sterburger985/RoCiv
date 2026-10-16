@@ -163,7 +163,7 @@ MapConfig.TERRAIN_DEPTH = 32 -- studs of solid terrain below sea level
 MapConfig.TERRAIN_BLEND_DISTANCE = 44 -- studs over which heights blend at borders
 MapConfig.TERRAIN_FRAME_BUDGET_MS = 6 -- painting time per frame (progressive reveal)
 MapConfig.RIVER_HALF_WIDTH = 7
-MapConfig.SNOW_LINE = 70 -- studs above sea level where mountain rock turns to snow
+MapConfig.SNOW_LINE = 78 -- studs above sea level where mountain rock turns to snow
 MapConfig.TERRAIN_WATER_COLOR = Color3.fromRGB(30, 104, 136)
 MapConfig.TERRAIN_WATER_TRANSPARENCY = 0.9
 MapConfig.TERRAIN_WATER_REFLECTANCE = 0.15
@@ -171,6 +171,7 @@ MapConfig.TERRAIN_WATER_WAVE_SIZE = 0.05
 MapConfig.TERRAIN_WATER_WAVE_SPEED = 6
 MapConfig.OUTLINE_SEGMENT_LENGTH = 10 -- outlines follow terrain in pieces this long
 MapConfig.OWNER_OUTLINE_LIFT = 0.4
+MapConfig.OUTLINE_SURFACE_CLEARANCE = 1.6 -- studs above the highest nearby column top
 -- Each territory is drawn inset by this many studs; the dark base plate
 -- shows through the gap and forms the border lines (2 * inset wide).
 MapConfig.BORDER_INSET = 1.25

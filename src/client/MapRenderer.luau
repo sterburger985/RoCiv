@@ -346,11 +346,15 @@ function MapRenderer.buildOutline(self: MapRenderer, polygon: { Vector2 }, width
 	local poly = Geometry.insetConvex(polygon, MapConfig.BORDER_INSET + width * 0.5)
 	local step = MapConfig.OUTLINE_SEGMENT_LENGTH
 	local function at(p: Vector2): Vector3
-		-- Highest nearby surface so lines never sink into slopes.
-		local h = self:heightAt(p)
-		h = math.max(h, self:heightAt(p + Vector2.new(3, 0)), self:heightAt(p - Vector2.new(3, 0)))
-		h = math.max(h, self:heightAt(p + Vector2.new(0, 3)), self:heightAt(p - Vector2.new(0, 3)))
-		return self:mapToWorld(p, h + 0.8 + lift)
+		-- Highest surface within one voxel column so lines never sink into
+		-- slopes (rendered voxel surfaces bulge slightly above column tops).
+		local h = -math.huge
+		for dx = -4, 4, 4 do
+			for dz = -4, 4, 4 do
+				h = math.max(h, self:heightAt(p + Vector2.new(dx, dz)))
+			end
+		end
+		return self:mapToWorld(p, h + MapConfig.OUTLINE_SURFACE_CLEARANCE + lift)
 	end
 	local n = #poly
 	for i = 1, n do
@@ -362,7 +366,7 @@ function MapRenderer.buildOutline(self: MapRenderer, polygon: { Vector2 }, width
 			for k = 1, pieces do
 				local nextP = at(a2:Lerp(b2, k / pieces))
 				local len = (nextP - prev).Magnitude
-				local seg = plainPart("Edge", color, Vector3.new(width, 0.3, len + width * 0.5), (prev + nextP) * 0.5)
+				local seg = plainPart("Edge", color, Vector3.new(width, 0.6, len + width * 0.5), (prev + nextP) * 0.5)
 				seg.CFrame = CFrame.lookAt((prev + nextP) * 0.5, nextP)
 				seg.Material = Enum.Material.SmoothPlastic
 				seg.Parent = model
