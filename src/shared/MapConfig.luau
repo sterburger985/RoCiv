@@ -1,21 +1,38 @@
 --!strict
 -- MapConfig
--- Central configuration for RoCiv map generation and rendering (Phase 1).
--- Every tunable number for the strategic map lives here so balance changes
--- never require touching generator or renderer code.
+-- Central configuration for RoCiv's strategic map: generation, terrain,
+-- rendering, fog of war, camera and development tools. Every tunable lives
+-- here so balance and presentation changes never require touching the
+-- generator, renderer or camera code.
 
 local MapConfig = {}
 
 -- Generation ---------------------------------------------------------------
 
 MapConfig.DEFAULT_SEED = 12345
-MapConfig.DEFAULT_TERRITORY_COUNT = 150
+MapConfig.DEFAULT_TERRITORY_COUNT = 260
 MapConfig.MIN_TERRITORY_COUNT = 20
 MapConfig.MAX_TERRITORY_COUNT = 600
 
--- Map area in studs. Logical 2D coordinates (x, y) map to world (X, Z).
-MapConfig.MAP_WIDTH = 1600
-MapConfig.MAP_HEIGHT = 1000
+-- World size. The map grows with the territory count so territories keep a
+-- consistent size: area = count * TERRITORY_AREA, shaped by MAP_ASPECT
+-- (width / height). Logical 2D coordinates (x, y) map to world (X, Z).
+-- Set FIXED_MAP_WIDTH / FIXED_MAP_HEIGHT to numbers to force a size instead.
+MapConfig.TERRITORY_AREA = 16000 -- studs^2 per territory (~125 studs across)
+MapConfig.MAP_ASPECT = 1.6
+MapConfig.FIXED_MAP_WIDTH = nil :: number?
+MapConfig.FIXED_MAP_HEIGHT = nil :: number?
+
+function MapConfig.mapSizeFor(territoryCount: number): (number, number)
+	if MapConfig.FIXED_MAP_WIDTH and MapConfig.FIXED_MAP_HEIGHT then
+		return MapConfig.FIXED_MAP_WIDTH, MapConfig.FIXED_MAP_HEIGHT
+	end
+	local area = territoryCount * MapConfig.TERRITORY_AREA
+	local height = math.sqrt(area / MapConfig.MAP_ASPECT)
+	local width = height * MapConfig.MAP_ASPECT
+	-- Round to whole studs so sizes are readable in logs.
+	return math.floor(width + 0.5), math.floor(height + 0.5)
+end
 
 -- Lloyd relaxation passes. More passes = more evenly sized, rounder cells.
 MapConfig.LLOYD_ITERATIONS = 2
@@ -62,7 +79,15 @@ MapConfig.TERRITORY_THICKNESS = 2
 -- Each territory is drawn inset by this many studs; the dark base plate
 -- shows through the gap and forms the border lines (2 * inset wide).
 MapConfig.BORDER_INSET = 1.25
-MapConfig.BORDER_COLOR = Color3.fromRGB(28, 30, 36)
+MapConfig.BORDER_COLOR = Color3.fromRGB(24, 26, 32)
+
+-- Decorative world around the playable map (never gameplay data, never
+-- selectable). The frame marks the playable edge; the backdrop is open sea
+-- that fills the rest of the view so there is no grey void.
+MapConfig.MAP_FRAME_WIDTH = 10
+MapConfig.MAP_FRAME_COLOR = Color3.fromRGB(14, 18, 26)
+MapConfig.BACKDROP_COLOR = Color3.fromRGB(22, 52, 92)
+MapConfig.BACKDROP_SIZE = 60000 -- studs, visual size (one scaled part)
 
 -- "Wedge"        two WedgeParts per polygon triangle. Default: works everywhere.
 -- "EditableMesh" one runtime MeshPart per territory. Tested in Phase 1: the
@@ -72,35 +97,75 @@ MapConfig.BORDER_COLOR = Color3.fromRGB(28, 30, 36)
 --                back to wedges once the budget is exhausted.
 -- "Auto"         same as EditableMesh with fallback.
 MapConfig.RENDER_BACKEND = "Wedge"
-MapConfig.TERRITORY_MATERIAL = Enum.Material.Plastic
+MapConfig.TERRITORY_MATERIAL = Enum.Material.Plastic -- SmoothPlastic showed sun glare in testing
 -- Yield every N territories while rendering so the client never freezes.
 MapConfig.RENDER_BATCH_SIZE = 25
 
--- Selection highlight
-MapConfig.SELECTION_OUTLINE_COLOR = Color3.fromRGB(255, 220, 90)
-MapConfig.SELECTION_FILL_COLOR = Color3.fromRGB(255, 255, 255)
-MapConfig.SELECTION_FILL_TRANSPARENCY = 0.7
+-- Selection / hover outlines (drawn from the territory polygon)
+MapConfig.SELECTION_OUTLINE_COLOR = Color3.fromRGB(255, 214, 80)
+MapConfig.SELECTION_OUTLINE_WIDTH = 3
+MapConfig.HOVER_OUTLINE_COLOR = Color3.fromRGB(245, 245, 235)
+MapConfig.HOVER_OUTLINE_WIDTH = 1.2
+MapConfig.OWNER_OUTLINE_WIDTH = 1.6
+-- How strongly an owner's colour tints a territory's fill (0..1).
+MapConfig.OWNER_FILL_TINT = 0.28
+
+-- Placeholder owner palette (Phase 2 ownership testing). Real civilizations
+-- arrive in Phase 6; until then owners are numbers 1..N.
+MapConfig.OWNER_COLORS = {
+	Color3.fromRGB(220, 60, 60),
+	Color3.fromRGB(60, 120, 230),
+	Color3.fromRGB(240, 170, 40),
+	Color3.fromRGB(160, 80, 210),
+	Color3.fromRGB(40, 190, 170),
+	Color3.fromRGB(235, 110, 180),
+	Color3.fromRGB(130, 200, 60),
+	Color3.fromRGB(240, 240, 240),
+}
 
 -- Client lighting overrides for a clear top-down strategy view (presentation
--- only; applied locally by ClientMain). Atmosphere haze and depth of field
--- wash the map out at strategic camera heights.
+-- only; applied locally by ClientMain). Atmosphere haze, depth of field and
+-- bloom wash the map out at strategic camera heights.
 MapConfig.MAP_ATMOSPHERE_DENSITY = 0
 MapConfig.DISABLE_POST_EFFECTS = true -- DepthOfField, Bloom, SunRays
+MapConfig.LIGHTING_CLOCK_TIME = 12 -- sun overhead = even lighting
+MapConfig.LIGHTING_BRIGHTNESS = 1.6
+MapConfig.LIGHTING_EXPOSURE = 0
+MapConfig.LIGHTING_ENV_SPECULAR = 0
+MapConfig.LIGHTING_SATURATION = 0.12 -- ColorCorrection saturation boost
+
+-- Fog of war -----------------------------------------------------------------
+
+MapConfig.FOG_OF_WAR_ENABLED = true
+-- Placeholder vision until cities and units exist (Phase 6+): every player
+-- starts with one vision source on the land territory nearest the map
+-- centre. Range is in territories (neighbour hops).
+MapConfig.START_VISION_RANGE = 3
+-- Fog presentation (client only; never authoritative)
+MapConfig.FOG_UNEXPLORED_COLOR = Color3.fromRGB(34, 36, 44) -- close to the border colour so unexplored borders fade
+MapConfig.FOG_EXPLORED_GREY = Color3.fromRGB(70, 72, 80)
+MapConfig.FOG_EXPLORED_BLEND = 0.55 -- 0 = full colour, 1 = grey
 
 -- Camera -------------------------------------------------------------------
 
-MapConfig.CAMERA_MIN_HEIGHT = 80
-MapConfig.CAMERA_MAX_HEIGHT = 1300
-MapConfig.CAMERA_START_HEIGHT = 900
-MapConfig.CAMERA_PITCH_DEGREES = 62 -- 90 would be straight down
+MapConfig.CAMERA_PITCH_DEGREES = 66 -- 90 would be straight down
+MapConfig.CAMERA_FIELD_OF_VIEW = 50 -- vertical, degrees
+MapConfig.CAMERA_MIN_HEIGHT = 60
+-- Margins kept free around the fitted map (fraction of the viewport) so
+-- edge UI does not cover it.
+MapConfig.CAMERA_FIT_MARGIN_X = 0.02
+MapConfig.CAMERA_FIT_MARGIN_Y = 0.04
+-- How far beyond "whole map fits" the player may zoom out.
+MapConfig.CAMERA_MAX_ZOOM_OUT = 1.2
 MapConfig.CAMERA_PAN_SPEED = 1.1 -- multiplied by current height, studs/sec
 MapConfig.CAMERA_ZOOM_STEP = 0.12 -- fraction of height per wheel notch
+MapConfig.CAMERA_ZOOM_SMOOTHING = 14 -- higher = snappier
 
 -- Development tools ----------------------------------------------------------
 
--- The regenerate panel / remote only work inside Roblox Studio. This flag
+-- The dev panel and dev remotes only work inside Roblox Studio. This flag
 -- lets you turn them off in Studio too. They can never run in a live server
--- because MapService also checks RunService:IsStudio().
+-- because the server also checks RunService:IsStudio().
 MapConfig.DEV_TOOLS_ENABLED = true
 
 return MapConfig

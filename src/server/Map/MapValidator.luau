@@ -23,7 +23,11 @@ export type Report = {
 
 local MapValidator = {}
 
-local POS_TOL = 1e-3
+-- Position tolerance in studs. Vector2 stores 32-bit floats, so a vertex
+-- shared by two cells (computed independently by each) can differ by ~1e-3
+-- at the far side of a 4000-stud map. 0.01 studs is far below anything
+-- visible or gameplay-relevant.
+local POS_TOL = 0.01
 
 -- Unknown terrain is reported separately; treat it as land here.
 local function isWaterRecord(t: any): boolean

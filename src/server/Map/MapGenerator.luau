@@ -170,8 +170,9 @@ function MapGenerator.generate(options: GenerateOptions?): MapData
 		MapConfig.MIN_TERRITORY_COUNT,
 		MapConfig.MAX_TERRITORY_COUNT
 	)
-	local width = opts.width or MapConfig.MAP_WIDTH
-	local height = opts.height or MapConfig.MAP_HEIGHT
+	local autoW, autoH = MapConfig.mapSizeFor(count)
+	local width = opts.width or autoW
+	local height = opts.height or autoH
 
 	local rng = Random.new(seed)
 
@@ -455,32 +456,6 @@ function MapGenerator.fingerprint(map: MapData): string
 		h = (bit32.band(h * 403, 0xFFFFFFFF) + bit32.lshift(bit32.band(h, 0xFFFF), 24)) % 4294967296
 	end
 	return string.format("%08x", h)
-end
-
--- Plain-table copy safe to send over a RemoteFunction (no internal fields).
-function MapGenerator.toClientPayload(map: MapData, includeSeed: boolean): { [string]: any }
-	local list = table.create(#map.territoryIds)
-	for _, id in map.territoryIds do
-		local t = map.territories[id]
-		table.insert(list, {
-			id = t.id,
-			polygon = t.polygon,
-			centroid = t.centroid,
-			neighbors = t.neighbors,
-			terrainType = t.terrainType,
-			elevation = t.elevation,
-			fertility = t.fertility,
-			ownerId = t.ownerId,
-			cityId = t.cityId,
-		})
-	end
-	return {
-		seed = if includeSeed then map.seed else nil,
-		territoryCount = map.territoryCount,
-		width = map.width,
-		height = map.height,
-		territories = list,
-	}
 end
 
 return MapGenerator

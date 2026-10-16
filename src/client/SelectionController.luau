@@ -3,17 +3,22 @@
 -- Left-click a territory to select it. Deselect by left-clicking outside the
 -- map, right-clicking without dragging (right-drag pans the camera), or the
 -- panel's close button. Escape is not used: Roblox reserves it for its menu.
+-- Hovering shows a thin outline; the selection gets a thick gold outline.
 --
--- The click is projected onto the map plane, converted to map coordinates
--- and resolved with MapQuery against the territory *data*. The rendered
--- instance is only used to draw the highlight.
+-- The cursor is projected onto the map plane, converted to map coordinates
+-- and resolved with MapQuery against the territory *data*. Rendered parts
+-- are never used to decide which territory was picked. Unexplored
+-- territories can be selected but reveal nothing (the client has no data).
 
 local UserInputService = game:GetService("UserInputService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local RunService = game:GetService("RunService")
 local Players = game:GetService("Players")
 
 local Shared = ReplicatedStorage:WaitForChild("RoCiv"):WaitForChild("Shared")
 local MapConfig = require(Shared:WaitForChild("MapConfig"))
+
+local FX_FOLDER_NAME = "RoCivClientFX"
 
 local SelectionController = {}
 SelectionController.__index = SelectionController
@@ -21,10 +26,13 @@ SelectionController.__index = SelectionController
 export type SelectionController = typeof(setmetatable(
 	{} :: {
 		renderer: any,
+		state: any,
 		query: any,
-		byId: { [number]: any },
 		selectedId: number?,
-		highlight: Highlight,
+		hoverId: number?,
+		fx: Folder,
+		selectionOutline: Instance?,
+		hoverOutline: Instance?,
 		listeners: { (record: any?) -> () },
 		connections: { RBXScriptConnection },
 		pressPos: Vector2?,
@@ -34,33 +42,24 @@ export type SelectionController = typeof(setmetatable(
 ))
 
 function SelectionController.new(renderer: any): SelectionController
-	-- One persistent Highlight, re-targeted on every selection (never duplicated).
-	local fxFolder = workspace:FindFirstChild("RoCivClientFX")
-	if not fxFolder then
-		fxFolder = Instance.new("Folder")
-		fxFolder.Name = "RoCivClientFX"
-		fxFolder.Parent = workspace
+	-- One persistent FX folder; outlines inside it are replaced, never stacked.
+	local old = workspace:FindFirstChild(FX_FOLDER_NAME)
+	if old then
+		old:Destroy()
 	end
-	local existing = fxFolder:FindFirstChild("SelectionHighlight")
-	if existing then
-		existing:Destroy()
-	end
-	local highlight = Instance.new("Highlight")
-	highlight.Name = "SelectionHighlight"
-	highlight.FillColor = MapConfig.SELECTION_FILL_COLOR
-	highlight.FillTransparency = MapConfig.SELECTION_FILL_TRANSPARENCY
-	highlight.OutlineColor = MapConfig.SELECTION_OUTLINE_COLOR
-	highlight.OutlineTransparency = 0
-	highlight.DepthMode = Enum.HighlightDepthMode.Occluded
-	highlight.Enabled = false
-	highlight.Parent = fxFolder
+	local fx = Instance.new("Folder")
+	fx.Name = FX_FOLDER_NAME
+	fx.Parent = workspace
 
 	local self = setmetatable({
 		renderer = renderer,
+		state = nil,
 		query = nil,
-		byId = {},
 		selectedId = nil,
-		highlight = highlight,
+		hoverId = nil,
+		fx = fx,
+		selectionOutline = nil,
+		hoverOutline = nil,
 		listeners = {},
 		connections = {},
 		pressPos = nil,
@@ -70,13 +69,11 @@ function SelectionController.new(renderer: any): SelectionController
 	return self
 end
 
-function SelectionController.setMap(self: SelectionController, payload: any, query: any)
-	self:clear()
+function SelectionController.setMap(self: SelectionController, state: any, query: any)
+	self.state = state
 	self.query = query
-	self.byId = {}
-	for _, t in payload.territories do
-		self.byId[t.id] = t
-	end
+	self:_setHover(nil)
+	self:clear()
 end
 
 function SelectionController.onChanged(self: SelectionController, fn: (record: any?) -> ())
@@ -84,38 +81,108 @@ function SelectionController.onChanged(self: SelectionController, fn: (record: a
 end
 
 function SelectionController._notify(self: SelectionController)
-	local record = if self.selectedId then self.byId[self.selectedId] else nil
-	-- Expose for debugging / automated tests.
+	local record = if self.selectedId and self.state then self.state:get(self.selectedId) else nil
+	-- Exposed for debugging / automated tests.
 	Players.LocalPlayer:SetAttribute("SelectedTerritoryId", self.selectedId or 0)
 	for _, fn in self.listeners do
 		task.spawn(fn, record)
 	end
 end
 
+-- Re-sends the current record (e.g. after its visibility or owner changed).
+function SelectionController.refresh(self: SelectionController, changedIds: { number }?)
+	if not self.selectedId then
+		return
+	end
+	if changedIds and not table.find(changedIds, self.selectedId) then
+		return
+	end
+	self:_notify()
+end
+
+function SelectionController._outline(self: SelectionController, id: number, width: number, color: Color3, lift: number): Instance?
+	local poly = self.renderer:getPolygon(id)
+	if not poly then
+		return nil
+	end
+	local outline = self.renderer:buildOutline(poly, width, color, lift)
+	outline.Parent = self.fx
+	return outline
+end
+
+-- Fill lightening: selection is stronger than hover; readable at any zoom
+-- (the outlines alone are only ~1 pixel wide when fully zoomed out).
+local SELECT_EMPHASIS = 0.3
+local HOVER_EMPHASIS = 0.12
+
+function SelectionController._emphasis(self: SelectionController, id: number?)
+	if not id then
+		return
+	end
+	local amount = nil
+	if id == self.selectedId then
+		amount = SELECT_EMPHASIS
+	elseif id == self.hoverId then
+		amount = HOVER_EMPHASIS
+	end
+	self.renderer:setEmphasis(id, amount)
+end
+
 function SelectionController.select(self: SelectionController, id: number?)
-	if id ~= nil and self.byId[id] == nil then
+	if id ~= nil and (not self.state or self.state:get(id) == nil) then
 		id = nil
 	end
 	if id == self.selectedId then
 		return
 	end
+	local previous = self.selectedId
 	self.selectedId = id
+	self:_emphasis(previous)
+	self:_emphasis(id)
+	if self.selectionOutline then
+		self.selectionOutline:Destroy()
+		self.selectionOutline = nil
+	end
 	if id then
-		local root = self.renderer:getVisualRoot(id)
-		self.highlight.Adornee = root
-		self.highlight.Enabled = root ~= nil
-	else
-		self.highlight.Adornee = nil
-		self.highlight.Enabled = false
+		self.selectionOutline =
+			self:_outline(id, MapConfig.SELECTION_OUTLINE_WIDTH, MapConfig.SELECTION_OUTLINE_COLOR, 0.14)
+		if self.selectionOutline then
+			self.selectionOutline.Name = "SelectionOutline"
+		end
 	end
 	self:_notify()
 end
 
 function SelectionController.clear(self: SelectionController)
+	local previous = self.selectedId
 	self.selectedId = nil
-	self.highlight.Adornee = nil
-	self.highlight.Enabled = false
+	self:_emphasis(previous)
+	if self.selectionOutline then
+		self.selectionOutline:Destroy()
+		self.selectionOutline = nil
+	end
 	self:_notify()
+end
+
+function SelectionController._setHover(self: SelectionController, id: number?)
+	if id == self.hoverId then
+		return
+	end
+	local previous = self.hoverId
+	self.hoverId = id
+	self:_emphasis(previous)
+	self:_emphasis(id)
+	if self.hoverOutline then
+		self.hoverOutline:Destroy()
+		self.hoverOutline = nil
+	end
+	if id then
+		self.hoverOutline = self:_outline(id, MapConfig.HOVER_OUTLINE_WIDTH, MapConfig.HOVER_OUTLINE_COLOR, 0.1)
+		if self.hoverOutline then
+			self.hoverOutline.Name = "HoverOutline"
+		end
+	end
+	Players.LocalPlayer:SetAttribute("HoverTerritoryId", id or 0)
 end
 
 -- Screen position -> territory id (or nil).
@@ -137,6 +204,22 @@ function SelectionController.pick(self: SelectionController, screenPos: Vector2)
 end
 
 function SelectionController._bind(self: SelectionController)
+	local lastMouse = Vector2.new(-1, -1)
+	local lastCamCF = CFrame.identity
+	table.insert(
+		self.connections,
+		RunService.RenderStepped:Connect(function()
+			-- Hover: only re-pick when the mouse or camera actually moved.
+			local m = UserInputService:GetMouseLocation()
+			local cam = workspace.CurrentCamera
+			local camCF = if cam then cam.CFrame else CFrame.identity
+			if m ~= lastMouse or camCF ~= lastCamCF then
+				lastMouse = m
+				lastCamCF = camCF
+				self:_setHover(self:pick(m))
+			end
+		end)
+	)
 	table.insert(
 		self.connections,
 		UserInputService.InputBegan:Connect(function(input, gameProcessed)

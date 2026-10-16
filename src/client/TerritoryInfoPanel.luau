@@ -1,13 +1,16 @@
 --!strict
 -- TerritoryInfoPanel (client)
--- Reusable panel showing the selected territory's data. Created once; it
--- only updates text on selection changes (no UI is recreated).
+-- Reusable panel showing what this player knows about the selected
+-- territory. Created once; selection changes only update text. Unexplored
+-- territories show "Unknown" because the client has no data for them.
 
 local Players = game:GetService("Players")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 
 local Shared = ReplicatedStorage:WaitForChild("RoCiv"):WaitForChild("Shared")
 local TerrainTypes = require(Shared:WaitForChild("TerrainTypes"))
+local MapConfig = require(Shared:WaitForChild("MapConfig"))
+local TerritoryStyle = require(script.Parent:WaitForChild("TerritoryStyle"))
 
 local GUI_NAME = "TerritoryInfo"
 
@@ -20,7 +23,9 @@ export type TerritoryInfoPanel = typeof(setmetatable(
 		frame: Frame,
 		title: TextLabel,
 		swatch: Frame,
+		ownerSwatch: Frame,
 		values: { [string]: TextLabel },
+		neighborList: TextLabel,
 		closeButton: TextButton,
 	},
 	TerritoryInfoPanel
@@ -28,9 +33,11 @@ export type TerritoryInfoPanel = typeof(setmetatable(
 
 local FIELDS = {
 	{ key = "id", label = "Territory ID" },
+	{ key = "visibility", label = "Visibility" },
 	{ key = "terrain", label = "Terrain" },
 	{ key = "elevation", label = "Elevation" },
 	{ key = "fertility", label = "Fertility" },
+	{ key = "resources", label = "Resources" },
 	{ key = "neighbors", label = "Neighbours" },
 	{ key = "owner", label = "Owner" },
 }
@@ -38,7 +45,10 @@ local FIELDS = {
 local BG = Color3.fromRGB(22, 24, 30)
 local TEXT = Color3.fromRGB(236, 232, 222)
 local MUTED = Color3.fromRGB(150, 148, 140)
-local ACCENT = Color3.fromRGB(255, 220, 90)
+local ACCENT = MapConfig.SELECTION_OUTLINE_COLOR
+
+local ROW_H = 24
+local TOP = 54
 
 local function label(parent: Instance, text: string, color: Color3, size: number, font: Enum.Font): TextLabel
 	local l = Instance.new("TextLabel")
@@ -62,14 +72,14 @@ function TerritoryInfoPanel.new(onClose: () -> ()): TerritoryInfoPanel
 	local gui = Instance.new("ScreenGui")
 	gui.Name = GUI_NAME
 	gui.ResetOnSpawn = false
-	gui.IgnoreGuiInset = false
 	gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 
+	local height = TOP + #FIELDS * ROW_H + 44
 	local frame = Instance.new("Frame")
 	frame.Name = "Panel"
 	frame.AnchorPoint = Vector2.new(0, 1)
 	frame.Position = UDim2.new(0, 16, 1, -16)
-	frame.Size = UDim2.fromOffset(260, 236)
+	frame.Size = UDim2.fromOffset(270, height)
 	frame.BackgroundColor3 = BG
 	frame.BackgroundTransparency = 0.08
 	frame.Visible = false
@@ -92,10 +102,11 @@ function TerritoryInfoPanel.new(onClose: () -> ()): TerritoryInfoPanel
 	sc.CornerRadius = UDim.new(0, 3)
 	sc.Parent = swatch
 
-	local title = label(frame, "Territory", TEXT, 20, Enum.Font.GothamBold)
+	local title = label(frame, "Territory", TEXT, 19, Enum.Font.GothamBold)
 	title.Name = "Title"
 	title.Position = UDim2.fromOffset(38, 12)
 	title.Size = UDim2.new(1, -80, 0, 26)
+	title.TextTruncate = Enum.TextTruncate.AtEnd
 
 	local close = Instance.new("TextButton")
 	close.Name = "Close"
@@ -111,7 +122,7 @@ function TerritoryInfoPanel.new(onClose: () -> ()): TerritoryInfoPanel
 	close.Activated:Connect(onClose)
 
 	local rule = Instance.new("Frame")
-	rule.Position = UDim2.fromOffset(16, 46)
+	rule.Position = UDim2.fromOffset(16, 44)
 	rule.Size = UDim2.new(1, -32, 0, 1)
 	rule.BackgroundColor3 = ACCENT
 	rule.BackgroundTransparency = 0.6
@@ -120,21 +131,40 @@ function TerritoryInfoPanel.new(onClose: () -> ()): TerritoryInfoPanel
 
 	local values: { [string]: TextLabel } = {}
 	for i, f in FIELDS do
-		local y = 56 + (i - 1) * 26
+		local y = TOP + (i - 1) * ROW_H
 		local k = label(frame, f.label, MUTED, 14, Enum.Font.Gotham)
 		k.Position = UDim2.fromOffset(16, y)
-		k.Size = UDim2.new(0.5, -16, 0, 22)
+		k.Size = UDim2.new(0.45, -16, 0, 22)
 		local v = label(frame, "-", TEXT, 15, Enum.Font.GothamMedium)
 		v.Name = "Value_" .. f.key
 		v.TextXAlignment = Enum.TextXAlignment.Right
-		v.Position = UDim2.new(0.5, 0, 0, y)
-		v.Size = UDim2.new(0.5, -16, 0, 22)
+		v.Position = UDim2.new(0.45, 0, 0, y)
+		v.Size = UDim2.new(0.55, -16, 0, 22)
+		v.TextTruncate = Enum.TextTruncate.AtEnd
 		values[f.key] = v
 	end
 
-	local hint = label(frame, "Right-click or × to deselect", MUTED, 12, Enum.Font.Gotham)
-	hint.Position = UDim2.new(0, 16, 1, -24)
-	hint.Size = UDim2.new(1, -32, 0, 16)
+	-- Small colour chip next to the owner value.
+	local ownerSwatch = Instance.new("Frame")
+	ownerSwatch.Name = "OwnerSwatch"
+	ownerSwatch.AnchorPoint = Vector2.new(1, 0.5)
+	ownerSwatch.Size = UDim2.fromOffset(10, 10)
+	ownerSwatch.BorderSizePixel = 0
+	ownerSwatch.Visible = false
+	ownerSwatch.Parent = frame
+	local oc = Instance.new("UICorner")
+	oc.CornerRadius = UDim.new(1, 0)
+	oc.Parent = ownerSwatch
+
+	local neighborList = label(frame, "", MUTED, 12, Enum.Font.Code)
+	neighborList.Name = "NeighborList"
+	neighborList.Position = UDim2.new(0, 16, 1, -40)
+	neighborList.Size = UDim2.new(1, -32, 0, 16)
+	neighborList.TextTruncate = Enum.TextTruncate.AtEnd
+
+	local hint = label(frame, "Right-click or × to deselect · F to frame map", MUTED, 11, Enum.Font.Gotham)
+	hint.Position = UDim2.new(0, 16, 1, -22)
+	hint.Size = UDim2.new(1, -32, 0, 14)
 
 	gui.Parent = playerGui
 
@@ -143,12 +173,17 @@ function TerritoryInfoPanel.new(onClose: () -> ()): TerritoryInfoPanel
 		frame = frame,
 		title = title,
 		swatch = swatch,
+		ownerSwatch = ownerSwatch,
 		values = values,
+		neighborList = neighborList,
 		closeButton = close,
 	}, TerritoryInfoPanel)
 end
 
-local function pct(v: number): string
+local function pct(v: number?): string
+	if v == nil then
+		return "Unknown"
+	end
 	return string.format("%d%%", math.floor(v * 100 + 0.5))
 end
 
@@ -157,15 +192,47 @@ function TerritoryInfoPanel.show(self: TerritoryInfoPanel, t: any?)
 		self.frame.Visible = false
 		return
 	end
-	local def = TerrainTypes.get(t.terrainType)
-	self.title.Text = (if def then def.displayName else t.terrainType) .. " Region"
-	self.swatch.BackgroundColor3 = if def then def.color else Color3.new(1, 0, 1)
+	local known = t.state ~= "Unexplored" and t.terrainType ~= nil
+	local def = if known then TerrainTypes.get(t.terrainType) else nil
+	self.title.Text = if def then def.displayName .. " Region" else "Unexplored Region"
+	self.swatch.BackgroundColor3 = TerritoryStyle.fillColor(t)
 	self.values.id.Text = tostring(t.id)
-	self.values.terrain.Text = if def then def.displayName else t.terrainType
-	self.values.elevation.Text = pct(t.elevation)
-	self.values.fertility.Text = pct(t.fertility)
+	self.values.visibility.Text = t.state
+	self.values.terrain.Text = if def then def.displayName else "Unknown"
+	self.values.elevation.Text = if known then pct(t.elevation) else "Unknown"
+	self.values.fertility.Text = if known then pct(t.fertility) else "Unknown"
+	if not known then
+		self.values.resources.Text = "Unknown"
+	elseif t.resources and #t.resources > 0 then
+		self.values.resources.Text = tostring(#t.resources)
+	else
+		self.values.resources.Text = "None yet"
+	end
 	self.values.neighbors.Text = tostring(#t.neighbors)
-	self.values.owner.Text = if t.ownerId then ("Civilization " .. tostring(t.ownerId)) else "Unowned"
+	local ids = {}
+	for i, nb in t.neighbors do
+		if i > 12 then
+			table.insert(ids, "…")
+			break
+		end
+		table.insert(ids, tostring(nb))
+	end
+	self.neighborList.Text = "Adjacent: " .. table.concat(ids, ", ")
+
+	local ownerColor = TerritoryStyle.ownerColor(t.ownerId)
+	if not known then
+		self.values.owner.Text = "Unknown"
+	elseif t.state == "Explored" and t.ownerId then
+		self.values.owner.Text = TerritoryStyle.ownerName(t.ownerId) .. " (last seen)"
+	else
+		self.values.owner.Text = TerritoryStyle.ownerName(t.ownerId)
+	end
+	local ownerRow = self.values.owner
+	self.ownerSwatch.Visible = known and ownerColor ~= nil
+	if ownerColor then
+		self.ownerSwatch.BackgroundColor3 = ownerColor
+		self.ownerSwatch.Position = UDim2.new(0.45, -6, 0, ownerRow.Position.Y.Offset + 11)
+	end
 	self.frame.Visible = true
 end
 

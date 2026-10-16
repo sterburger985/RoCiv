@@ -10,6 +10,11 @@
 -- Borders are not separate objects: territories are drawn inset by
 -- BORDER_INSET and a dark base plate shows through the gaps.
 --
+-- Fog of war is drawn by recolouring these same territory visuals (see
+-- TerritoryStyle), so fog always matches territory ids and boundaries.
+-- Around the map: a dark frame marks the playable edge and a large
+-- decorative sea backdrop fills the rest of the view (no grey void).
+--
 -- Rendering never decides gameplay. Each visual only carries a TerritoryId
 -- attribute; selection resolves clicks against data via MapQuery.
 
@@ -19,11 +24,11 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("RoCiv"):WaitForChild("Shared")
 local Geometry = require(Shared:WaitForChild("Geometry"))
 local MapConfig = require(Shared:WaitForChild("MapConfig"))
-local TerrainTypes = require(Shared:WaitForChild("TerrainTypes"))
+local TerritoryStyle = require(script.Parent:WaitForChild("TerritoryStyle"))
 
 local MAP_FOLDER_NAME = "StrategicMap"
 
-type Visual = { root: Instance, parts: { BasePart }, mesh: EditableMesh? }
+type Visual = { root: Instance, parts: { BasePart }, mesh: EditableMesh?, color: Color3, ownerOutline: Instance? }
 
 local MapRenderer = {}
 MapRenderer.__index = MapRenderer
@@ -32,6 +37,10 @@ export type MapRenderer = typeof(setmetatable(
 	{} :: {
 		folder: Folder?,
 		visuals: { [number]: Visual },
+		polygons: { [number]: { Vector2 } },
+		emphasis: { [number]: number },
+		state: any,
+		lastStats: { [string]: any }?,
 		width: number,
 		height: number,
 		backend: string,
@@ -53,6 +62,10 @@ function MapRenderer.new(): MapRenderer
 	return setmetatable({
 		folder = nil,
 		visuals = {},
+		polygons = {},
+		emphasis = {},
+		state = nil,
+		lastStats = nil,
 		width = 0,
 		height = 0,
 		backend = "none",
@@ -78,6 +91,8 @@ function MapRenderer.clear(self: MapRenderer)
 		end
 	end
 	table.clear(self.visuals)
+	table.clear(self.polygons)
+	table.clear(self.emphasis)
 	if self.folder then
 		self.folder:Destroy()
 		self.folder = nil
@@ -150,7 +165,7 @@ function MapRenderer._buildMeshVisual(self: MapRenderer, poly: { Vector2 }, colo
 	part.Material = MapConfig.TERRITORY_MATERIAL
 	part.Color = color
 	part.Position = self:mapToWorld(c, MapConfig.MAP_ORIGIN_Y - half)
-	return { root = part, parts = { part }, mesh = em }
+	return { root = part, parts = { part }, mesh = em, color = color, ownerOutline = nil }
 end
 
 -- Classic two-wedge triangle.
@@ -198,7 +213,7 @@ function MapRenderer._buildWedgeVisual(self: MapRenderer, poly: { Vector2 }, col
 	for i = 2, #poly - 1 do
 		self:_drawTriangle(p1, self:mapToWorld(poly[i], y), self:mapToWorld(poly[i + 1], y), model, color, parts)
 	end
-	return { root = model, parts = parts, mesh = nil }
+	return { root = model, parts = parts, mesh = nil, color = color, ownerOutline = nil }
 end
 
 -- Public -------------------------------------------------------------------
@@ -214,12 +229,118 @@ local function editableMeshAvailable(): boolean
 	return false
 end
 
--- Renders the payload. Returns render stats.
-function MapRenderer.render(self: MapRenderer, payload: any): { [string]: any }
+local function plainPart(name: string, color: Color3, size: Vector3, position: Vector3): Part
+	local p = Instance.new("Part")
+	p.Name = name
+	p.Anchored = true
+	p.CanCollide = false
+	p.CanQuery = false
+	p.CanTouch = false
+	p.CastShadow = false
+	p.Material = MapConfig.TERRITORY_MATERIAL
+	p.TopSurface = Enum.SurfaceType.Smooth
+	p.BottomSurface = Enum.SurfaceType.Smooth
+	p.Color = color
+	p.Size = size
+	p.Position = position
+	return p
+end
+
+-- Parts are limited to 2048 studs per axis, so large flat decorations use a
+-- capped part plus a SpecialMesh scale to reach their visual size.
+local function scaledPart(name: string, color: Color3, size: Vector3, position: Vector3): Part
+	local partSize = Vector3.new(math.min(size.X, 2048), math.min(size.Y, 2048), math.min(size.Z, 2048))
+	local p = plainPart(name, color, partSize, position)
+	if partSize ~= size then
+		local mesh = Instance.new("SpecialMesh")
+		mesh.MeshType = Enum.MeshType.Brick
+		mesh.Scale = Vector3.new(size.X / partSize.X, size.Y / partSize.Y, size.Z / partSize.Z)
+		mesh.Parent = p
+	end
+	return p
+end
+
+-- Decorative surroundings: border base, playable-edge frame, sea backdrop.
+function MapRenderer._buildSurroundings(self: MapRenderer, folder: Instance)
+	local y = MapConfig.MAP_ORIGIN_Y
+	local t = MapConfig.TERRITORY_THICKNESS
+	local W, H = self.width, self.height
+	local surround = Instance.new("Folder")
+	surround.Name = "Surroundings"
+	surround.Parent = folder
+
+	-- Seen through the gaps between territories: forms every border line.
+	scaledPart("BorderBase", MapConfig.BORDER_COLOR, Vector3.new(W + 2, 1, H + 2), Vector3.new(0, y - t * 0.5 - 0.5, 0)).Parent =
+		surround
+
+	-- Dark rim just outside the playable rectangle.
+	local f = MapConfig.MAP_FRAME_WIDTH
+	scaledPart("MapFrame", MapConfig.MAP_FRAME_COLOR, Vector3.new(W + 2 * f, 1, H + 2 * f), Vector3.new(0, y - t * 0.5 - 0.7, 0)).Parent =
+		surround
+
+	-- Open sea filling the rest of the view.
+	local size = MapConfig.BACKDROP_SIZE
+	scaledPart("SeaBackdrop", MapConfig.BACKDROP_COLOR, Vector3.new(size, 1, size), Vector3.new(0, y - t - 2, 0)).Parent = surround
+end
+
+-- Thin flat parts along a polygon's edges, just above the surface.
+function MapRenderer.buildOutline(self: MapRenderer, polygon: { Vector2 }, width: number, color: Color3, lift: number): Model
+	local model = Instance.new("Model")
+	model.Name = "Outline"
+	-- Sit inside the territory fill: inset past the border gap plus half the line.
+	local poly = Geometry.insetConvex(polygon, MapConfig.BORDER_INSET + width * 0.5)
+	local y = MapConfig.MAP_ORIGIN_Y + lift
+	local n = #poly
+	for i = 1, n do
+		local a = self:mapToWorld(poly[i], y)
+		local b = self:mapToWorld(poly[i % n + 1], y)
+		local len = (b - a).Magnitude
+		if len > 0.05 then
+			local seg = plainPart("Edge", color, Vector3.new(width, 0.2, len + width), (a + b) * 0.5)
+			seg.CFrame = CFrame.lookAt((a + b) * 0.5, b)
+			seg.Material = Enum.Material.SmoothPlastic
+			seg.Parent = model
+		end
+	end
+	return model
+end
+
+function MapRenderer._applyStyle(self: MapRenderer, record: any)
+	local v = self.visuals[record.id]
+	if not v then
+		return
+	end
+	local color = TerritoryStyle.fillColor(record, self.emphasis[record.id])
+	if v.color ~= color then
+		v.color = color
+		for _, p in v.parts do
+			p.Color = color
+		end
+	end
+	local borderColor = TerritoryStyle.ownerBorderColor(record)
+	if v.ownerOutline then
+		v.ownerOutline:Destroy()
+		v.ownerOutline = nil
+	end
+	if borderColor and self.folder then
+		local outline = self:buildOutline(self.polygons[record.id], MapConfig.OWNER_OUTLINE_WIDTH, borderColor, 0.06)
+		outline.Name = "OwnerBorder_" .. record.id
+		outline.Parent = self.folder:FindFirstChild("OwnerBorders")
+		v.ownerOutline = outline
+	end
+	-- Attributes mirror the client's knowledge for debugging/tests only.
+	v.root:SetAttribute("Visibility", record.state)
+	v.root:SetAttribute("KnownTerrain", record.terrainType)
+	v.root:SetAttribute("KnownOwner", record.ownerId)
+end
+
+-- Builds every territory visual from the client map state. Returns stats.
+function MapRenderer.render(self: MapRenderer, state: any): { [string]: any }
 	local t0 = os.clock()
 	self:clear()
-	self.width = payload.width
-	self.height = payload.height
+	self.state = state
+	self.width = state.width
+	self.height = state.height
 
 	local backend = MapConfig.RENDER_BACKEND
 	if backend == "Auto" then
@@ -229,32 +350,21 @@ function MapRenderer.render(self: MapRenderer, payload: any): { [string]: any }
 	local folder = Instance.new("Folder")
 	folder.Name = MAP_FOLDER_NAME
 	self.folder = folder
-
-	-- Base plate: its colour is the border colour seen through the gaps.
-	local base = Instance.new("Part")
-	base.Name = "BorderBase"
-	base.Anchored = true
-	base.CanCollide = false
-	base.CanQuery = false
-	base.CanTouch = false
-	base.CastShadow = false
-	base.Material = MapConfig.TERRITORY_MATERIAL
-	base.Color = MapConfig.BORDER_COLOR
-	base.Size = Vector3.new(payload.width + 8, 1, payload.height + 8)
-	base.Position = Vector3.new(0, MapConfig.MAP_ORIGIN_Y - MapConfig.TERRITORY_THICKNESS * 0.5 - 0.5, 0)
-	base.Parent = folder
-
+	self:_buildSurroundings(folder)
 	local territoriesFolder = Instance.new("Folder")
 	territoriesFolder.Name = "Territories"
 	territoriesFolder.Parent = folder
+	local ownerFolder = Instance.new("Folder")
+	ownerFolder.Name = "OwnerBorders"
+	ownerFolder.Parent = folder
 	folder.Parent = workspace
 
 	local failures = 0
 	local meshMeshes = 0
 	local meshBudgetExhausted = false
-	for i, t in payload.territories do
-		local def = TerrainTypes.get(t.terrainType)
-		local color = if def then def.color else Color3.new(1, 0, 1)
+	for i, t in state.list do
+		local color = TerritoryStyle.fillColor(t)
+		self.polygons[t.id] = t.polygon
 		local poly = Geometry.insetConvex(t.polygon, MapConfig.BORDER_INSET)
 		local visual: Visual
 		if backend == "EditableMesh" and not meshBudgetExhausted then
@@ -283,9 +393,9 @@ function MapRenderer.render(self: MapRenderer, payload: any): { [string]: any }
 		end
 		visual.root.Name = "Territory_" .. t.id
 		visual.root:SetAttribute("TerritoryId", t.id)
-		visual.root:SetAttribute("TerrainType", t.terrainType)
 		visual.root.Parent = territoriesFolder
 		self.visuals[t.id] = visual
+		self:_applyStyle(t)
 		if i % MapConfig.RENDER_BATCH_SIZE == 0 then
 			task.wait()
 		end
@@ -298,13 +408,37 @@ function MapRenderer.render(self: MapRenderer, payload: any): { [string]: any }
 		instanceCount = instanceCount,
 		meshFallbacks = failures,
 		editableMeshes = meshMeshes,
-		territoryCount = #payload.territories,
+		territoryCount = #state.list,
 	}
+	self.lastStats = stats
 	folder:SetAttribute("Backend", backend)
 	folder:SetAttribute("RenderMs", stats.renderMs)
 	folder:SetAttribute("InstanceCount", instanceCount)
-	folder:SetAttribute("MapVersion", payload.version)
+	folder:SetAttribute("MapVersion", state.version)
 	return stats
+end
+
+-- Re-styles only the given territories (visibility or ownership changed).
+-- All changes are applied in the same frame, so nothing flickers.
+function MapRenderer.refresh(self: MapRenderer, state: any, ids: { number })
+	for _, id in ids do
+		local r = state:get(id)
+		if r then
+			self:_applyStyle(r)
+		end
+	end
+end
+
+-- Lightens one territory (hover / selection feedback). nil removes it.
+function MapRenderer.setEmphasis(self: MapRenderer, id: number, amount: number?)
+	if self.emphasis[id] == amount then
+		return
+	end
+	self.emphasis[id] = amount
+	local r = self.state and self.state:get(id)
+	if r then
+		self:_applyStyle(r)
+	end
 end
 
 function MapRenderer.getVisualRoot(self: MapRenderer, id: number): Instance?
@@ -312,24 +446,15 @@ function MapRenderer.getVisualRoot(self: MapRenderer, id: number): Instance?
 	return if v then v.root else nil
 end
 
-function MapRenderer.setTerritoryColor(self: MapRenderer, id: number, color: Color3)
-	local v = self.visuals[id]
-	if v then
-		for _, p in v.parts do
-			p.Color = color
-		end
-	end
+function MapRenderer.getPolygon(self: MapRenderer, id: number): { Vector2 }?
+	return self.polygons[id]
 end
 
--- Rendering validation: every territory represented, visuals match data,
--- no stray or duplicate map objects.
-function MapRenderer.validate(self: MapRenderer, payload: any): (boolean, { string })
+-- Rendering validation: every territory represented once, visuals match the
+-- current data (including fog state), no stray or duplicate map objects.
+function MapRenderer.validate(self: MapRenderer, state: any): (boolean, { string })
 	local problems: { string } = {}
-	local expected: { [number]: any } = {}
-	for _, t in payload.territories do
-		expected[t.id] = t
-	end
-	for _, t in payload.territories do
+	for _, t in state.list do
 		local v = self.visuals[t.id]
 		if not v then
 			table.insert(problems, "No visual for territory " .. t.id)
@@ -338,14 +463,17 @@ function MapRenderer.validate(self: MapRenderer, payload: any): (boolean, { stri
 		if v.root:GetAttribute("TerritoryId") ~= t.id then
 			table.insert(problems, "Visual attribute mismatch for territory " .. t.id)
 		end
-		if v.root:GetAttribute("TerrainType") ~= t.terrainType then
-			table.insert(problems, "Visual terrain mismatch for territory " .. t.id)
+		if v.root:GetAttribute("Visibility") ~= t.state then
+			table.insert(problems, "Visual visibility mismatch for territory " .. t.id)
 		end
-		local def = TerrainTypes.get(t.terrainType)
 		if #v.parts == 0 then
 			table.insert(problems, "Visual has no parts for territory " .. t.id)
-		elseif def and v.parts[1].Color ~= def.color then
-			table.insert(problems, "Visual colour does not match terrain for territory " .. t.id)
+		elseif v.parts[1].Color ~= TerritoryStyle.fillColor(t, self.emphasis[t.id]) then
+			table.insert(problems, "Visual colour does not match state for territory " .. t.id)
+		end
+		local wantBorder = TerritoryStyle.ownerBorderColor(t) ~= nil
+		if wantBorder ~= (v.ownerOutline ~= nil) then
+			table.insert(problems, "Owner border mismatch for territory " .. t.id)
 		end
 		if not v.root:IsDescendantOf(workspace) then
 			table.insert(problems, "Visual not in workspace for territory " .. t.id)
@@ -363,14 +491,18 @@ function MapRenderer.validate(self: MapRenderer, payload: any): (boolean, { stri
 	if self.folder then
 		local territoriesFolder = self.folder:FindFirstChild("Territories")
 		local roots = if territoriesFolder then #territoriesFolder:GetChildren() else 0
-		if roots ~= #payload.territories then
-			table.insert(problems, string.format("Expected %d territory visuals, found %d", #payload.territories, roots))
+		if roots ~= #state.list then
+			table.insert(problems, string.format("Expected %d territory visuals, found %d", #state.list, roots))
 		end
-		for _, root in (if territoriesFolder then territoriesFolder:GetChildren() else {}) do
-			local id = root:GetAttribute("TerritoryId")
-			if type(id) ~= "number" or not expected[id] then
-				table.insert(problems, "Visual with unknown territory id: " .. root.Name)
+		local borders = self.folder:FindFirstChild("OwnerBorders")
+		local expectedBorders = 0
+		for _, t in state.list do
+			if TerritoryStyle.ownerBorderColor(t) then
+				expectedBorders += 1
 			end
+		end
+		if borders and #borders:GetChildren() ~= expectedBorders then
+			table.insert(problems, string.format("Expected %d owner borders, found %d", expectedBorders, #borders:GetChildren()))
 		end
 	end
 	local ok = #problems == 0

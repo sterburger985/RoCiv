@@ -73,7 +73,7 @@ function MapQuery.territoryAt(self: MapQuery, p: Vector2): number?
 		return nil
 	end
 	for _, r in bucket do
-		if Geometry.pointInConvex(r.polygon, p, 1e-4) then
+		if Geometry.pointInConvex(r.polygon, p, 0.01) then
 			return r.id
 		end
 	end

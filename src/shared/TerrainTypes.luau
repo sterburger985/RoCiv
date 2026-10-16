@@ -20,7 +20,7 @@ local defs: { TerrainDef } = {
 	{
 		id = "Ocean",
 		displayName = "Ocean",
-		color = Color3.fromRGB(38, 82, 140),
+		color = Color3.fromRGB(34, 78, 140),
 		isWater = true,
 		baseFertility = 0.15,
 		moveCost = 1,
@@ -30,7 +30,7 @@ local defs: { TerrainDef } = {
 		-- Coast = shallow water next to land (Civilization convention).
 		id = "Coast",
 		displayName = "Coast",
-		color = Color3.fromRGB(78, 140, 196),
+		color = Color3.fromRGB(70, 140, 200),
 		isWater = true,
 		baseFertility = 0.35,
 		moveCost = 1,
@@ -39,7 +39,7 @@ local defs: { TerrainDef } = {
 	{
 		id = "Grassland",
 		displayName = "Grassland",
-		color = Color3.fromRGB(110, 170, 80),
+		color = Color3.fromRGB(104, 166, 70),
 		isWater = false,
 		baseFertility = 0.75,
 		moveCost = 1,
@@ -48,7 +48,7 @@ local defs: { TerrainDef } = {
 	{
 		id = "Plains",
 		displayName = "Plains",
-		color = Color3.fromRGB(184, 176, 96),
+		color = Color3.fromRGB(194, 172, 86),
 		isWater = false,
 		baseFertility = 0.6,
 		moveCost = 1,
@@ -66,7 +66,7 @@ local defs: { TerrainDef } = {
 	{
 		id = "Desert",
 		displayName = "Desert",
-		color = Color3.fromRGB(224, 196, 130),
+		color = Color3.fromRGB(218, 186, 112),
 		isWater = false,
 		baseFertility = 0.12,
 		moveCost = 1,
@@ -75,7 +75,7 @@ local defs: { TerrainDef } = {
 	{
 		id = "Tundra",
 		displayName = "Tundra",
-		color = Color3.fromRGB(176, 188, 186),
+		color = Color3.fromRGB(154, 168, 172),
 		isWater = false,
 		baseFertility = 0.2,
 		moveCost = 1,
@@ -84,7 +84,7 @@ local defs: { TerrainDef } = {
 	{
 		id = "Mountains",
 		displayName = "Mountains",
-		color = Color3.fromRGB(112, 100, 92),
+		color = Color3.fromRGB(122, 106, 94),
 		isWater = false,
 		baseFertility = 0.05,
 		moveCost = 3,
