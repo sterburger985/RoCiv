@@ -179,8 +179,9 @@ function MovementClient.drawRegionBorders(self: MovementClient)
 						for k = 1, m do
 							local c, d = o.polygon[k], o.polygon[k % m + 1]
 							if (a - d).Magnitude < 0.05 and (b - c).Magnitude < 0.05 then
-								local y = self.renderer:surfaceY(r.territoryId) + 0.05
-								local part = linePart(self.renderer:mapToWorld(a, y), self.renderer:mapToWorld(b, y), 0.5, Color3.fromRGB(20, 22, 28), 0.55, false)
+								local y = self.renderer:surfaceY(r.territoryId) + 0.08
+								-- Light lines read clearly on every terrain colour.
+								local part = linePart(self.renderer:mapToWorld(a, y), self.renderer:mapToWorld(b, y), 1.1, Color3.fromRGB(245, 240, 225), 0.35, false)
 								part.Parent = folder
 								count += 1
 							end
@@ -286,7 +287,7 @@ function MovementClient._requestRoute(self: MovementClient)
 	-- Keep the start/goal markers, redraw the line.
 	local folder = self:_sub("Route")
 	for _, c in folder:GetChildren() do
-		if c.Name == "Step" or c.Name == "CostLabel" then
+		if c.Name == "Step" or c.Name == "StepCasing" or c.Name == "CostLabel" then
 			c:Destroy()
 		end
 	end
@@ -301,7 +302,11 @@ function MovementClient._requestRoute(self: MovementClient)
 	for i = 2, #res.path do
 		local a = self:_centroidWorld(res.path[i - 1], 0.45)
 		local b = self:_centroidWorld(res.path[i], 0.45)
-		local seg = linePart(a, b, 1.6, Color3.fromRGB(255, 220, 90), 0.05, true)
+		-- Dark casing under a bright core keeps the route readable on light tiles.
+		local casing = linePart(a - Vector3.new(0, 0.05, 0), b - Vector3.new(0, 0.05, 0), 3.4, Color3.fromRGB(28, 24, 18), 0.15, false)
+		casing.Name = "StepCasing"
+		casing.Parent = folder
+		local seg = linePart(a, b, 1.8, Color3.fromRGB(255, 205, 70), 0, true)
 		seg.Name = "Step"
 		seg.Parent = folder
 	end
