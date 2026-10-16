@@ -1,7 +1,8 @@
 --!strict
 -- SelectionController (client)
--- Left-click a territory to select it; click outside the map, press Escape,
--- or use the panel's close button to deselect.
+-- Left-click a territory to select it. Deselect by left-clicking outside the
+-- map, right-clicking without dragging (right-drag pans the camera), or the
+-- panel's close button. Escape is not used: Roblox reserves it for its menu.
 --
 -- The click is projected onto the map plane, converted to map coordinates
 -- and resolved with MapQuery against the territory *data*. The rendered
@@ -27,6 +28,7 @@ export type SelectionController = typeof(setmetatable(
 		listeners: { (record: any?) -> () },
 		connections: { RBXScriptConnection },
 		pressPos: Vector2?,
+		rightPressPos: Vector2?,
 	},
 	SelectionController
 ))
@@ -62,6 +64,7 @@ function SelectionController.new(renderer: any): SelectionController
 		listeners = {},
 		connections = {},
 		pressPos = nil,
+		rightPressPos = nil,
 	}, SelectionController)
 	self:_bind()
 	return self
@@ -142,14 +145,22 @@ function SelectionController._bind(self: SelectionController)
 			end
 			if input.UserInputType == Enum.UserInputType.MouseButton1 then
 				self.pressPos = UserInputService:GetMouseLocation()
-			elseif input.KeyCode == Enum.KeyCode.Escape then
-				self:clear()
+			elseif input.UserInputType == Enum.UserInputType.MouseButton2 then
+				self.rightPressPos = UserInputService:GetMouseLocation()
 			end
 		end)
 	)
 	table.insert(
 		self.connections,
 		UserInputService.InputEnded:Connect(function(input, gameProcessed)
+			if input.UserInputType == Enum.UserInputType.MouseButton2 then
+				local rp = self.rightPressPos
+				self.rightPressPos = nil
+				if rp and not gameProcessed and (UserInputService:GetMouseLocation() - rp).Magnitude <= 6 then
+					self:clear()
+				end
+				return
+			end
 			if input.UserInputType ~= Enum.UserInputType.MouseButton1 then
 				return
 			end

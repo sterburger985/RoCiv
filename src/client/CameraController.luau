@@ -13,6 +13,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Shared = ReplicatedStorage:WaitForChild("RoCiv"):WaitForChild("Shared")
 local MapConfig = require(Shared:WaitForChild("MapConfig"))
 
+local RENDER_STEP_NAME = "RoCivStrategyCamera"
+
 local CameraController = {}
 CameraController.__index = CameraController
 
@@ -84,6 +86,8 @@ function CameraController._apply(self: CameraController)
 	local back = self.height / math.tan(pitch)
 	local pos = self.focus + Vector3.new(0, self.height, back)
 	cam.CFrame = CFrame.lookAt(pos, self.focus)
+	-- Focus drives level-of-detail and lighting priority: keep it on the map.
+	cam.Focus = CFrame.new(self.focus)
 end
 
 -- Project the mouse onto the map plane (used by right-drag panning).
@@ -138,35 +142,37 @@ function CameraController._bind(self: CameraController)
 			end
 		end)
 	)
-	table.insert(
-		self.connections,
-		RunService.RenderStepped:Connect(function(dt)
-			if not UserInputService:GetFocusedTextBox() then
-				local move = Vector3.zero
-				for key, dir in PAN_KEYS do
-					if UserInputService:IsKeyDown(key) then
-						move += dir
-					end
-				end
-				if move.Magnitude > 0 then
-					self.focus += move.Unit * self.height * MapConfig.CAMERA_PAN_SPEED * dt
-					self:_clamp()
+	-- Bound just after Roblox's default camera scripts (RenderPriority.Camera)
+	-- so nothing overwrites our CFrame later in the same frame. Using the
+	-- plain RenderStepped event raced with the default CameraModule at
+	-- startup and the view sometimes showed the default camera instead.
+	RunService:BindToRenderStep(RENDER_STEP_NAME, Enum.RenderPriority.Camera.Value + 1, function(dt)
+		if not UserInputService:GetFocusedTextBox() then
+			local move = Vector3.zero
+			for key, dir in PAN_KEYS do
+				if UserInputService:IsKeyDown(key) then
+					move += dir
 				end
 			end
-			self:_apply()
-			if self.dragging and dragAnchor then
-				local now = mouseOnPlane()
-				if now then
-					self.focus += dragAnchor - now
-					self:_clamp()
-					self:_apply()
-				end
+			if move.Magnitude > 0 then
+				self.focus += move.Unit * self.height * MapConfig.CAMERA_PAN_SPEED * dt
+				self:_clamp()
 			end
-		end)
-	)
+		end
+		self:_apply()
+		if self.dragging and dragAnchor then
+			local now = mouseOnPlane()
+			if now then
+				self.focus += dragAnchor - now
+				self:_clamp()
+				self:_apply()
+			end
+		end
+	end)
 end
 
 function CameraController.destroy(self: CameraController)
+	RunService:UnbindFromRenderStep(RENDER_STEP_NAME)
 	for _, c in self.connections do
 		c:Disconnect()
 	end

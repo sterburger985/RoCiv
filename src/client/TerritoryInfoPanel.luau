@@ -132,7 +132,7 @@ function TerritoryInfoPanel.new(onClose: () -> ()): TerritoryInfoPanel
 		values[f.key] = v
 	end
 
-	local hint = label(frame, "Esc or × to deselect", MUTED, 12, Enum.Font.Gotham)
+	local hint = label(frame, "Right-click or × to deselect", MUTED, 12, Enum.Font.Gotham)
 	hint.Position = UDim2.new(0, 16, 1, -24)
 	hint.Size = UDim2.new(1, -32, 0, 16)
 
