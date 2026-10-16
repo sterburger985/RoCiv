@@ -94,6 +94,14 @@ function MapRenderer.new(): MapRenderer
 		for _, fn in self.surfaceListeners do
 			fn(ids)
 		end
+		-- Progress for the dev panel / tests.
+		if self.folder then
+			local st = self.painter.stats
+			self.folder:SetAttribute("TerrainPainted", st.painted)
+			self.folder:SetAttribute("TerrainVoxels", st.voxels)
+			self.folder:SetAttribute("TerrainPaintMs", st.ms)
+			self.folder:SetAttribute("TerrainQueue", self.painter:queueLength())
+		end
 	end)
 	return self
 end

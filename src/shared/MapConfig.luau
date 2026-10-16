@@ -93,7 +93,7 @@ MapConfig.LAKE_MAX_TERRITORIES = 4
 -- consistent size: area = count * TERRITORY_AREA, shaped by MAP_ASPECT
 -- (width / height). Logical 2D coordinates (x, y) map to world (X, Z).
 -- Set FIXED_MAP_WIDTH / FIXED_MAP_HEIGHT to numbers to force a size instead.
-MapConfig.TERRITORY_AREA = 16000 -- studs^2 per territory (~125 studs across)
+MapConfig.TERRITORY_AREA = 28000 -- studs^2 per territory (~170 studs across)
 MapConfig.MAP_ASPECT = 1.6
 MapConfig.FIXED_MAP_WIDTH = nil :: number?
 MapConfig.FIXED_MAP_HEIGHT = nil :: number?
@@ -121,7 +121,7 @@ MapConfig.MIN_SHARED_EDGE_LENGTH = 4
 -- Default land share when no match size is given (match sizes override it).
 MapConfig.LAND_FRACTION = 0.42
 -- Share of LAND territories that become mountains (highest elevations).
-MapConfig.MOUNTAIN_FRACTION = 0.08
+MapConfig.MOUNTAIN_FRACTION = 0.10
 -- Territories touching the map edge are forced to water so the world is
 -- ringed by ocean.
 MapConfig.FORCE_EDGE_OCEAN = true
@@ -159,12 +159,13 @@ MapConfig.PARCHMENT_COLOR = Color3.fromRGB(214, 194, 150)
 MapConfig.PARCHMENT_LINE_COLOR = Color3.fromRGB(104, 82, 54) -- ink lines between parchment slabs
 
 -- Voxel terrain for known territories (TerrainPainter, presentation only).
-MapConfig.TERRAIN_DEPTH = 24 -- studs of solid terrain below sea level
-MapConfig.TERRAIN_BLEND_DISTANCE = 34 -- studs over which heights blend at borders
+MapConfig.TERRAIN_DEPTH = 32 -- studs of solid terrain below sea level
+MapConfig.TERRAIN_BLEND_DISTANCE = 44 -- studs over which heights blend at borders
 MapConfig.TERRAIN_FRAME_BUDGET_MS = 6 -- painting time per frame (progressive reveal)
-MapConfig.RIVER_HALF_WIDTH = 5
-MapConfig.TERRAIN_WATER_COLOR = Color3.fromRGB(28, 96, 132)
-MapConfig.TERRAIN_WATER_TRANSPARENCY = 0.55
+MapConfig.RIVER_HALF_WIDTH = 7
+MapConfig.SNOW_LINE = 54 -- studs above sea level where mountain rock turns to snow
+MapConfig.TERRAIN_WATER_COLOR = Color3.fromRGB(22, 82, 112)
+MapConfig.TERRAIN_WATER_TRANSPARENCY = 0.78
 MapConfig.TERRAIN_WATER_REFLECTANCE = 0.15
 MapConfig.TERRAIN_WATER_WAVE_SIZE = 0.05
 MapConfig.TERRAIN_WATER_WAVE_SPEED = 6

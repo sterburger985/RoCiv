@@ -736,65 +736,100 @@ local function generateOnce(seed: number, def: any, count: number, width: number
 
 	local masses, continents = labelLandmasses(territories, ids)
 
-	-- 6a. Rivers: downhill from high damp land to water.
+	-- 6a. Rivers: start deep inland on high, damp ground and flow toward the
+	-- nearest water, one territory closer each step (so every river reaches
+	-- the sea or a lake), preferring the lowest next territory.
 	local rivers: { River } = {}
 	local hasRiver: { [number]: boolean } = {}
-	local sources = {}
-	local highLand = if #landElev > 0 then quantile(landElev, 0.55) else 2
+	local waterIds = {}
 	for _, id in ids do
-		local t = territories[id]
-		if not t.isWater and t.elevation >= highLand and t.moisture > 0.35 and t.terrainType ~= "Desert" then
-			table.insert(sources, id)
+		if territories[id].isWater then
+			table.insert(waterIds, id)
 		end
 	end
-	-- Deterministic shuffle.
-	for i = #sources, 2, -1 do
-		local j = rng:NextInteger(1, i)
-		sources[i], sources[j] = sources[j], sources[i]
+	-- Hop distance from water over land (water = 0).
+	local coastDist: { [number]: number } = {}
+	do
+		local q = {}
+		for _, w in waterIds do
+			coastDist[w] = 0
+			table.insert(q, w)
+		end
+		local h = 1
+		while h <= #q do
+			local cur = q[h]
+			h += 1
+			for _, nb in territories[cur].neighbors do
+				if coastDist[nb] == nil and not territories[nb].isWater then
+					coastDist[nb] = coastDist[cur] + 1
+					table.insert(q, nb)
+				end
+			end
+		end
 	end
+	local sources = {}
+	local sourceScore: { [number]: number } = {}
+	for _, id in ids do
+		local t = territories[id]
+		local cd = coastDist[id] or 0
+		if not t.isWater and cd >= MapConfig.RIVER_MIN_LENGTH and t.moisture > 0.3 and t.terrainType ~= "Desert" then
+			table.insert(sources, id)
+			sourceScore[id] = cd + t.elevation * 2 + rng:NextNumber(0, 2.5)
+		end
+	end
+	table.sort(sources, function(x, y)
+		if sourceScore[x] == sourceScore[y] then
+			return x < y
+		end
+		return sourceScore[x] > sourceScore[y]
+	end)
 	for _, src in sources do
 		if #rivers >= def.rivers then
 			break
 		end
-		if not hasRiver[src] then
+		-- Keep rivers apart: no river already in or next to the source.
+		local crowded = hasRiver[src]
+		for _, nb in territories[src].neighbors do
+			if hasRiver[nb] then
+				crowded = true
+			end
+		end
+		if not crowded then
 			local path = { src }
 			local cur = src
 			local mouth = nil
-			local guard = 0
-			while guard < 60 do
-				guard += 1
+			local ok = true
+			while true do
 				local t = territories[cur]
-				local best, bestE = nil, t.elevation
-				local water = nil
+				local cd = coastDist[cur]
+				if cd == 1 then
+					local best = nil
+					for _, nb in t.neighbors do
+						local o = territories[nb]
+						if o.isWater and (best == nil or o.elevation < territories[best].elevation) then
+							best = nb
+						end
+					end
+					mouth = best
+					break
+				end
+				local best = nil
 				for _, nb in t.neighbors do
 					local o = territories[nb]
-					if o.isWater then
-						if not water or o.elevation < territories[water].elevation then
-							water = nb
+					if coastDist[nb] == cd - 1 and not o.isWater and o.terrainType ~= "Mountains" and not hasRiver[nb] then
+						if best == nil or o.elevation < territories[best].elevation then
+							best = nb
 						end
-					elseif o.elevation < bestE and not hasRiver[nb] and not table.find(path, nb) then
-						best, bestE = nb, o.elevation
 					end
 				end
-				if water then
-					mouth = water
-					break
-				elseif best then
-					table.insert(path, best)
-					cur = best
-				else
+				if not best then
+					ok = false
 					break
 				end
+				table.insert(path, best)
+				cur = best
 			end
-			-- A river must reach water and cross enough land; mountains may
-			-- only be the source.
-			local valid = mouth ~= nil and #path >= MapConfig.RIVER_MIN_LENGTH
-			for i = 2, #path do
-				if territories[path[i]].terrainType == "Mountains" then
-					valid = false
-				end
-			end
-			if valid then
+			if ok and mouth and #path >= MapConfig.RIVER_MIN_LENGTH then
 				local rid = #rivers + 1
 				table.insert(rivers, { id = rid, territoryIds = path, mouth = mouth :: number })
 				for _, tid in path do

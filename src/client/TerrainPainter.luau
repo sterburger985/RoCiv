@@ -90,7 +90,7 @@ local SEPIA = {
 local MATERIAL_COLORS: { [Enum.Material]: Color3 } = {
 	[M.Grass] = Color3.fromRGB(104, 148, 56),
 	[M.LeafyGrass] = Color3.fromRGB(46, 92, 38),
-	[M.Ground] = Color3.fromRGB(186, 164, 84),
+	[M.Ground] = Color3.fromRGB(200, 184, 104),
 	[M.Sand] = Color3.fromRGB(226, 204, 148),
 	[M.Sandstone] = Color3.fromRGB(196, 176, 128),
 	[M.Rock] = Color3.fromRGB(122, 112, 102),
@@ -513,7 +513,7 @@ function TerrainPainter._paint(self: TerrainPainter, id: number, mode: Mode?)
 							h += (dune * 5 + noise(wx / 150, wz / 150, 11) * 2) * f
 						elseif tt == "Tundra" then
 							h += noise(wx / 80, wz / 80, 12) * 3 * f
-							snow = noise(wx / 36, wz / 36, 13) > 0.18
+							snow = noise(wx / 36, wz / 36, 13) > 0.38
 						elseif tt == "Mountains" then
 							local peaks = ridge(wx, wz, 95, 14) ^ 1.5 * 52 + ridge(wx, wz, 38, 15) * 14
 							h += (peaks + noise(wx / 25, wz / 25, 16) * 3) * f
@@ -527,7 +527,7 @@ function TerrainPainter._paint(self: TerrainPainter, id: number, mode: Mode?)
 						local top = Y0 + h
 						if sepia then
 							if tt == "Mountains" and top > Y0 + 14 then
-								mat = if top > Y0 + 40 then SEPIA.Snow else SEPIA.High
+								mat = if top > Y0 + MapConfig.SNOW_LINE + noise(wx / 30, wz / 30, 17) * 6 then SEPIA.Snow else SEPIA.High
 							elseif canopy > 0 then
 								mat = SEPIA.Forest
 							else
@@ -537,7 +537,8 @@ function TerrainPainter._paint(self: TerrainPainter, id: number, mode: Mode?)
 							if beach and tt ~= "Mountains" then
 								mat = VISIBLE.Sand
 							elseif tt == "Mountains" then
-								mat = if top > Y0 + 40 then VISIBLE.Snow elseif top > Y0 + 12 then VISIBLE.Rock else VISIBLE.Grass
+								local snowLine = Y0 + MapConfig.SNOW_LINE + noise(wx / 30, wz / 30, 17) * 6
+								mat = if top > snowLine then VISIBLE.Snow elseif top > Y0 + 12 then VISIBLE.Rock else VISIBLE.Grass
 							elseif tt == "Forest" then
 								mat = if canopy > 0 then VISIBLE.Forest else VISIBLE.Grass
 							elseif tt == "Plains" then
